@@ -1,0 +1,20 @@
+{
+  "version": 2,
+  "dgSpecHash": "eX4KcEX4JW0=",
+  "success": false,
+  "projectFilePath": "C:\\Users\\Rabalder\\zalstudio\\C\uF03Atempnuget_dl\\TempProj\\TempProj.csproj",
+  "expectedPackageFiles": [],
+  "logs": [
+    {
+      "code": "NU1101",
+      "level": "Error",
+      "message": "Unable to find package NETStandard.Library. No packages exist with this id in source(s): Microsoft Visual Studio Offline Packages",
+      "projectPath": "C:\\Users\\Rabalder\\zalstudio\\C\uF03Atempnuget_dl\\TempProj\\TempProj.csproj",
+      "filePath": "C:\\Users\\Rabalder\\zalstudio\\C\uF03Atempnuget_dl\\TempProj\\TempProj.csproj",
+      "libraryId": "NETStandard.Library",
+      "targetGraphs": [
+        ".NETStandard,Version=v2.0"
+      ]
+    }
+  ]
+}
