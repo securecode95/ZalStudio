@@ -1,11 +1,13 @@
 use std::path::PathBuf;
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread;
 
 use mtp_rs::mtp::MtpDevice;
 use mtp_rs::ptp::{ObjectFormatCode, ObjectHandle, StorageId};
 
-const IMAGE_EXTS: &[&str] = &["jpg", "jpeg", "png", "gif", "bmp", "webp", "tiff", "tif", "heic", "heif"];
+const IMAGE_EXTS: &[&str] = &[
+    "jpg", "jpeg", "png", "gif", "bmp", "webp", "tiff", "tif", "heic", "heif",
+];
 
 #[derive(Debug, Clone)]
 pub struct MtpPhoto {
@@ -18,7 +20,10 @@ pub struct MtpPhoto {
 #[derive(Debug, Clone)]
 pub enum MtpCommand {
     ListPhotos,
-    Download { photos: Vec<MtpPhoto>, dest_dir: PathBuf },
+    Download {
+        photos: Vec<MtpPhoto>,
+        dest_dir: PathBuf,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -53,14 +58,6 @@ pub fn spawn_mtp_worker() -> (Sender<MtpCommand>, Receiver<MtpResult>) {
                                     device = Some(d);
                                 }
                                 Err(e) => {
-                                    #[cfg(windows)]
-                                    let msg = format!(
-                                        "Ingen MTP-enhet hittad. \
-På Windows krävs WinUSB-drivrutin (installera med Zadig). \
-Fel: {}",
-                                        e
-                                    );
-                                    #[cfg(not(windows))]
                                     let msg = format!("Ingen MTP-enhet hittad: {}", e);
                                     let _ = res_tx.send(MtpResult::Error(msg));
                                     continue;
@@ -69,9 +66,8 @@ Fel: {}",
                         }
 
                         let Some(dev) = device.as_ref() else {
-                            let _ = res_tx.send(MtpResult::Error(
-                                "Ingen MTP-enhet ansluten".into(),
-                            ));
+                            let _ =
+                                res_tx.send(MtpResult::Error("Ingen MTP-enhet ansluten".into()));
                             continue;
                         };
 
@@ -79,10 +75,8 @@ Fel: {}",
                         let storages = match dev.storages().await {
                             Ok(s) => s,
                             Err(e) => {
-                                let _ = res_tx.send(MtpResult::Error(format!(
-                                    "MTP-lagring: {}",
-                                    e
-                                )));
+                                let _ =
+                                    res_tx.send(MtpResult::Error(format!("MTP-lagring: {}", e)));
                                 device = None; // Reset connection
                                 continue;
                             }
@@ -115,11 +109,13 @@ Fel: {}",
                         let _ = res_tx.send(MtpResult::Photos(found));
                     }
 
-                    MtpCommand::Download { photos: to_download, dest_dir } => {
+                    MtpCommand::Download {
+                        photos: to_download,
+                        dest_dir,
+                    } => {
                         let Some(dev) = device.as_ref() else {
-                            let _ = res_tx.send(MtpResult::Error(
-                                "Ingen MTP-enhet ansluten".into(),
-                            ));
+                            let _ =
+                                res_tx.send(MtpResult::Error("Ingen MTP-enhet ansluten".into()));
                             continue;
                         };
 

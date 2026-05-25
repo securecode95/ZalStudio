@@ -1,24 +1,23 @@
 use std::collections::HashMap;
-use std::path::Path;
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::path::{Path, PathBuf};
+use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant};
 
 use egui::{Context, TextureHandle};
 
 use crate::config::Config;
-use crate::gallery::{discover_photos, Photo};
+use crate::gallery::{Photo, discover_photos};
 use crate::lang::Language;
-use crate::printer::{Printer, PrintJob};
+use crate::printer::{PrintJob, Printer};
 
-#[cfg(windows)]
-#[cfg(windows)]
-use crate::powershell_mtp_backend::{PsCommand, PsFolder, PsPhoto, PsResult, spawn_powershell_worker};
+use crate::mtp_backend::{MtpCommand, MtpPhoto, MtpResult, spawn_mtp_worker};
 
 // ============================================================================
 // App screens
 // ============================================================================
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AppScreen {
+    ProductSelect,
     SourceSelect,
     Gallery,
     Preview,
@@ -26,6 +25,7 @@ pub enum AppScreen {
     Importing,
     MobileUpload,
     MobileMenu,
+    UsbPlugWait,
     PhoneConnecting,
     PhoneFolderSelect,
     WiredPhonePicker,
@@ -33,6 +33,7 @@ pub enum AppScreen {
     GoogleDrivePicker,
     GooglePhotosPicker,
     PrintDone,
+    Payment,
 }
 
 // ============================================================================
@@ -45,6 +46,39 @@ pub enum PhoneType {
 }
 
 // ============================================================================
+// Picker source (wired phone picker can be used for phone or USB)
+// ============================================================================
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PickerSource {
+    Phone,
+    Usb,
+}
+
+// ============================================================================
+// Photo edit state (crop, zoom, rotate, filter)
+// ============================================================================
+#[derive(Debug, Clone)]
+pub struct PhotoEdit {
+    pub zoom: f32,     // 1.0 = cover-fit, >1.0 = zoomed in
+    pub pan_x: f32,    // -1.0 .. 1.0 horizontal pan
+    pub pan_y: f32,    // -1.0 .. 1.0 vertical pan
+    pub rotation: u32, // 0, 90, 180, 270 degrees
+    pub grayscale: bool,
+}
+
+impl Default for PhotoEdit {
+    fn default() -> Self {
+        Self {
+            zoom: 1.0,
+            pan_x: 0.0,
+            pan_y: 0.0,
+            rotation: 0,
+            grayscale: false,
+        }
+    }
+}
+
+// ============================================================================
 // Queue item
 // ============================================================================
 #[derive(Debug, Clone)]
@@ -52,6 +86,7 @@ pub struct QueueItem {
     pub photo_idx: usize,
     pub copies: u32,
     pub paper_size: String,
+    pub edit: PhotoEdit,
 }
 
 // ============================================================================
@@ -64,6 +99,9 @@ pub struct ZalStudio {
     // Photos
     pub photos: Vec<Photo>,
     pub selected_photo: usize,
+
+    // Current edit settings for the photo being previewed
+    pub current_edit: PhotoEdit,
 
     // Queue / printing
     pub queue: Vec<QueueItem>,
@@ -90,32 +128,44 @@ pub struct ZalStudio {
     pub qr_texture: Option<TextureHandle>,
     pub wifi_qr_texture: Option<TextureHandle>,
 
-    // Windows hotspot background update
-    #[cfg(windows)]
+    // Per-session WiFi credentials (randomized for each mobile upload)
+    pub session_ssid: Option<String>,
+    pub session_password: Option<String>,
+
+    // Hotspot background result
     pub hotspot_rx: Option<Receiver<(String, String, Result<(), String>)>>,
+
+    // Previous WiFi connection to restore when hotspot stops
+    pub previous_wifi_conn: Option<String>,
+
+    // USB plug-and-wait background worker
+    pub usb_rx: Option<Receiver<crate::usb_detect::UsbResult>>,
+
+    // Thumbnail background loader
+    pub thumb_rx: Option<Receiver<(String, egui::ColorImage)>>,
 
     // Phone connection
     pub phone_type: PhoneType,
     pub phone_connect_start: Option<Instant>,
     pub phone_poll_last: Instant,
 
-    // Windows WPD (PowerShell MTP backend)
-    #[cfg(windows)]
-    pub wpd_cmd_tx: Option<Sender<PsCommand>>,
-    #[cfg(windows)]
-    pub wpd_res_rx: Option<Receiver<PsResult>>,
-    #[cfg(windows)]
-    pub wpd_folders: Vec<PsFolder>,
-    #[cfg(windows)]
-    pub wpd_photos: Vec<PsPhoto>,
-    #[cfg(windows)]
-    pub wpd_selected: Vec<bool>,
+    // Native MTP backend
+    pub mtp_cmd_tx: Option<Sender<MtpCommand>>,
+    pub mtp_res_rx: Option<Receiver<MtpResult>>,
+    /// Raw MtpPhoto list kept for downloading (populated when native MTP is used)
+    pub mtp_raw_photos: Vec<MtpPhoto>,
 
     // Linux MTP / wired phone
     pub mtp_photos: Vec<crate::wired_import::PhonePhoto>,
     pub mtp_selected: Vec<bool>,
     pub phone_photos: Vec<crate::wired_import::PhonePhoto>,
     pub phone_selected: Vec<bool>,
+
+    // Product selection (Foto / Album / Collage)
+    pub selected_product: String,
+
+    // Picker context
+    pub picker_source: PickerSource,
 
     // Google Drive
     pub pkce_state: Option<crate::google_drive::PkceState>,
@@ -135,14 +185,37 @@ pub struct ZalStudio {
 
     // Cached textures
     textures: HashMap<String, TextureHandle>,
+
+    // Texture loading throttle (prevents UI freeze with many photos)
+    pub textures_loaded_this_frame: usize,
+    pub last_texture_pass: u64,
+    pub max_textures_per_frame: usize,
 }
 
 impl ZalStudio {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        // Load emoji font for icons
+        let emoji_path = "/usr/share/fonts/noto/NotoColorEmoji.ttf";
+        if let Ok(emoji_data) = std::fs::read(emoji_path) {
+            let mut fonts = egui::FontDefinitions::default();
+            fonts.font_data.insert(
+                "noto_color_emoji".to_owned(),
+                egui::FontData::from_owned(emoji_data),
+            );
+            fonts
+                .families
+                .entry(egui::FontFamily::Proportional)
+                .or_default()
+                .push("noto_color_emoji".to_owned());
+            cc.egui_ctx.set_fonts(fonts);
+        }
+
         let config = Config::load();
         let lang = Language::default();
         let photo_dir = config.photo_directory.clone();
-        let photos = discover_photos(&photo_dir);
+        let mut photos = discover_photos(&photo_dir);
+        let mut temp_photos = discover_photos(&config.temp_directory);
+        photos.append(&mut temp_photos);
 
         let (qr_tx, qr_rx) = channel();
 
@@ -160,14 +233,6 @@ impl ZalStudio {
             let _ = qr_tx.send(url.clone());
         }
 
-        // Pre-load textures for all photos
-        let mut textures = HashMap::new();
-        for photo in &photos {
-            if let Some(tex) = load_texture(&cc.egui_ctx, &photo.path) {
-                textures.insert(photo.path.to_string_lossy().to_string(), tex);
-            }
-        }
-
         // Initialize printers from config
         let printers: Vec<Printer> = config
             .all_printers()
@@ -176,10 +241,11 @@ impl ZalStudio {
             .collect();
 
         Self {
-            screen: AppScreen::SourceSelect,
+            screen: AppScreen::ProductSelect,
             lang,
             photos,
             selected_photo: 0,
+            current_edit: PhotoEdit::default(),
             queue: Vec::new(),
             queue_selected: 0,
             queue_clear_confirm: false,
@@ -197,21 +263,18 @@ impl ZalStudio {
             qr_rx,
             qr_texture: None,
             wifi_qr_texture: None,
-            #[cfg(windows)]
+            session_ssid: None,
+            session_password: None,
             hotspot_rx: None,
+            previous_wifi_conn: None,
+            usb_rx: None,
+            thumb_rx: None,
             phone_type: PhoneType::Android,
             phone_connect_start: None,
             phone_poll_last: Instant::now(),
-            #[cfg(windows)]
-            wpd_cmd_tx: None,
-            #[cfg(windows)]
-            wpd_res_rx: None,
-            #[cfg(windows)]
-            wpd_folders: Vec::new(),
-            #[cfg(windows)]
-            wpd_photos: Vec::new(),
-            #[cfg(windows)]
-            wpd_selected: Vec::new(),
+            mtp_cmd_tx: None,
+            mtp_res_rx: None,
+            mtp_raw_photos: Vec::new(),
             mtp_photos: Vec::new(),
             mtp_selected: Vec::new(),
             phone_photos: Vec::new(),
@@ -225,19 +288,41 @@ impl ZalStudio {
             drive_status: String::new(),
             photo_items: Vec::new(),
             photo_selected: Vec::new(),
+            picker_source: PickerSource::Phone,
+            selected_product: String::new(),
             toast: None,
-            textures,
+            textures: HashMap::new(),
+            textures_loaded_this_frame: 0,
+            last_texture_pass: 0,
+            max_textures_per_frame: 4,
         }
     }
 
     // ========================================================================
     // Photo / texture helpers
     // ========================================================================
+    /// Look up a cached texture without triggering a load.
+    pub fn cached_texture(&self, path: &Path) -> Option<&TextureHandle> {
+        let key = path.to_string_lossy().to_string();
+        self.textures.get(&key)
+    }
+
     pub fn texture_for(&mut self, ctx: &Context, path: &Path) -> Option<&TextureHandle> {
         let key = path.to_string_lossy().to_string();
         if !self.textures.contains_key(&key) {
+            let current_pass = ctx.cumulative_pass_nr();
+            if self.last_texture_pass != current_pass {
+                self.last_texture_pass = current_pass;
+                self.textures_loaded_this_frame = 0;
+            }
+            if self.textures_loaded_this_frame >= self.max_textures_per_frame {
+                ctx.request_repaint();
+                return None;
+            }
             if let Some(tex) = load_texture(ctx, path) {
                 self.textures.insert(key.clone(), tex);
+                self.textures_loaded_this_frame += 1;
+                ctx.request_repaint();
             }
         }
         self.textures.get(&key)
@@ -264,12 +349,22 @@ impl ZalStudio {
 
     pub fn wifi_qr_texture(&mut self, ctx: &Context) -> Option<&TextureHandle> {
         if self.wifi_qr_texture.is_none() {
-            let ssid = &self.config.wifi_ssid;
-            let pass = &self.config.wifi_password;
+            let ssid = self
+                .session_ssid
+                .as_ref()
+                .unwrap_or(&self.config.wifi_ssid)
+                .clone();
+            let pass = self
+                .session_password
+                .as_ref()
+                .unwrap_or(&self.config.wifi_password)
+                .clone();
+            let ssid = wifi_qr_escape(&ssid);
+            let pass = wifi_qr_escape(&pass);
             let wifi_string = if pass.is_empty() {
-                format!("WIFI:S:{};T:nopass;;", ssid)
+                format!("WIFI:T:nopass;S:{};H:false;;", ssid)
             } else {
-                format!("WIFI:S:{};T:WPA;P:{};;", ssid, pass)
+                format!("WIFI:T:WPA;S:{};P:{};H:false;;", ssid, pass)
             };
             if let Some(tex) = generate_qr_texture(ctx, &wifi_string) {
                 self.wifi_qr_texture = Some(tex);
@@ -286,29 +381,102 @@ impl ZalStudio {
     // Gallery
     // ========================================================================
     pub fn rescan(&mut self) {
-        self.photos = discover_photos(&self.config.photo_directory);
+        let mut photos = discover_photos(&self.config.photo_directory);
+        let mut temp_photos = discover_photos(&self.config.temp_directory);
+        photos.append(&mut temp_photos);
+        self.photos = photos;
         self.textures.clear();
+    }
+
+    /// After an import, jump directly to Preview with the first newly-imported
+    /// photo selected so the user can immediately set size, copies, etc.
+    pub fn enter_preview_for_imported(&mut self) {
+        if self.photos.is_empty() {
+            self.screen = AppScreen::Gallery;
+            return;
+        }
+        let temp_dir = &self.config.temp_directory;
+        self.selected_photo = self
+            .photos
+            .iter()
+            .position(|p| p.path.starts_with(temp_dir))
+            .unwrap_or(0);
+        self.current_edit = PhotoEdit::default();
+        self.screen = AppScreen::Preview;
     }
 
     // ========================================================================
     // Import
     // ========================================================================
     pub fn import_usb(&mut self) {
-        self.screen = AppScreen::Importing;
-        self.import_status = "Söker efter bilder...".to_string();
-        let source = self.config.effective_usb_path();
+        self.start_usb_wait();
+    }
+
+    fn start_usb_wait(&mut self) {
+        self.screen = AppScreen::UsbPlugWait;
         let dest = self.config.temp_directory.clone();
-        match crate::import::import_from_storage(&source, &dest) {
-            Ok(count) => {
-                self.import_status = format!("{} bilder importerade", count);
-                self.rescan();
-                self.screen = AppScreen::Gallery;
-                self.show_toast(format!("{} bilder importerade", count));
+        self.usb_rx = Some(crate::usb_detect::spawn_usb_worker(dest));
+    }
+
+    fn handle_usb_result(&mut self, result: crate::usb_detect::UsbResult) {
+        match result {
+            crate::usb_detect::UsbResult::Mounted(path) => {
+                self.screen = AppScreen::Importing;
+                self.import_status = format!("Importerar från {}...", path.display());
             }
-            Err(e) => {
+            crate::usb_detect::UsbResult::FoundPhotos(photos) => {
+                self.usb_rx = None;
+                self.phone_photos = photos.clone();
+                self.phone_selected = vec![false; self.phone_photos.len()];
+                self.picker_source = PickerSource::Usb;
+                self.phone_type = PhoneType::IPhone; // force GVFS fallback path in picker
+                self.spawn_thumbnail_worker(photos);
+                self.screen = AppScreen::WiredPhonePicker;
+            }
+            crate::usb_detect::UsbResult::Imported(count) => {
+                self.usb_rx = None;
+                self.import_status = format!("{} bilder importerade", count);
+                eprintln!("[IMPORT] Starting rescan after import...");
+                self.rescan();
+                eprintln!("[IMPORT] rescan done, {} photos total", self.photos.len());
+                self.enter_preview_for_imported();
+                self.show_toast(format!("{} bilder importerade", count));
+                eprintln!("[IMPORT] Switched to Gallery");
+            }
+            crate::usb_detect::UsbResult::Error(e) => {
+                self.usb_rx = None;
                 self.import_status = e.clone();
                 self.show_toast_long(e);
+                self.screen = AppScreen::SourceSelect;
             }
+        }
+    }
+
+    fn spawn_thumbnail_worker(&mut self, photos: Vec<crate::wired_import::PhonePhoto>) {
+        let (tx, rx) = channel::<(String, egui::ColorImage)>();
+        self.thumb_rx = Some(rx);
+
+        // Use multiple threads for faster thumbnail generation
+        let num_workers = std::thread::available_parallelism()
+            .map(|n| n.get().min(8))
+            .unwrap_or(2);
+        let chunk_size = (photos.len() + num_workers - 1) / num_workers;
+        let chunks: Vec<Vec<crate::wired_import::PhonePhoto>> =
+            photos.chunks(chunk_size).map(|c| c.to_vec()).collect();
+
+        for chunk in chunks {
+            let tx = tx.clone();
+            std::thread::spawn(move || {
+                for photo in chunk {
+                    let path = photo.path;
+                    let key = path.to_string_lossy().to_string();
+                    if let Some(color_image) = thumbnail_color_image(&path, 140) {
+                        if tx.send((key, color_image)).is_err() {
+                            break;
+                        }
+                    }
+                }
+            });
         }
     }
 
@@ -325,13 +493,17 @@ impl ZalStudio {
     // ========================================================================
     pub fn add_to_queue(&mut self) {
         let _ = self.photos.get(self.selected_photo);
-        let paper_size = self.config.paper_sizes.get(self.paper_size_idx)
+        let paper_size = self
+            .config
+            .paper_sizes
+            .get(self.paper_size_idx)
             .cloned()
             .unwrap_or_else(|| "10x15".to_string());
         self.queue.push(QueueItem {
             photo_idx: self.selected_photo,
             copies: self.copies,
             paper_size,
+            edit: self.current_edit.clone(),
         });
         self.show_toast("Tillagd i kön".to_string());
     }
@@ -348,20 +520,91 @@ impl ZalStudio {
     // ========================================================================
     // Print
     // ========================================================================
+    pub fn queue_total_price(&self) -> f64 {
+        self.queue
+            .iter()
+            .map(|item| {
+                let price = self.config.price_for_size(&item.paper_size);
+                price * item.copies as f64
+            })
+            .sum()
+    }
+
     pub fn print_queue(&mut self) {
         if self.queue.is_empty() {
             return;
         }
 
+        let mut dispatched = 0;
+        let mut failed = 0;
+
         for item in &self.queue {
-            let _photo = self.photos.get(item.photo_idx);
-            let _printer_name = self.config.printer_for_size(&item.paper_size);
+            let photo = match self.photos.get(item.photo_idx) {
+                Some(p) => p,
+                None => {
+                    failed += 1;
+                    continue;
+                }
+            };
+            let printer_name = match self.config.printer_for_size(&item.paper_size) {
+                Some(name) => name,
+                None => {
+                    failed += 1;
+                    continue;
+                }
+            };
+            let printer = match self.printers.iter_mut().find(|p| p.name() == printer_name) {
+                Some(p) => p,
+                None => {
+                    eprintln!("[PRINT] No Printer instance found for '{}'", printer_name);
+                    failed += 1;
+                    continue;
+                }
+            };
+
+            // Render edited version (crop, rotate, B&W) to a temp file
+            let edit_path = match render_edited_photo(
+                &photo.path,
+                &item.edit,
+                &item.paper_size,
+                &self.config.temp_directory,
+            ) {
+                Ok(path) => path,
+                Err(e) => {
+                    eprintln!("[PRINT] Failed to render edited photo: {}", e);
+                    failed += 1;
+                    continue;
+                }
+            };
+
+            let job_id = printer.queue_job(
+                &edit_path,
+                &item.paper_size,
+                item.copies,
+                self.config.fit_to_page,
+            );
+            eprintln!(
+                "[PRINT] Queued job {} on {} for {} ({} copies, {})",
+                job_id, printer_name, photo.file_name, item.copies, item.paper_size
+            );
+            dispatched += 1;
         }
 
         self.queue.clear();
         self.queue_selected = 0;
-        self.screen = AppScreen::PrintDone;
-        self.print_done_timer = 5.0;
+
+        if dispatched > 0 {
+            self.screen = AppScreen::PrintDone;
+            self.print_done_timer = 5.0;
+            if failed > 0 {
+                self.show_toast(format!("{} skrivna, {} misslyckades", dispatched, failed));
+            } else {
+                self.show_toast(format!("{} jobb skickade till skrivaren", dispatched));
+            }
+        } else {
+            self.show_toast_long("Inga jobb kunde skrivas ut".into());
+            self.screen = AppScreen::Gallery;
+        }
     }
 
     // ========================================================================
@@ -381,48 +624,96 @@ impl ZalStudio {
     pub fn open_mobile_upload(&mut self) {
         self.screen = AppScreen::MobileUpload;
 
-        #[cfg(windows)]
-        {
-            // Check if hotspot is already active — if so, skip background thread entirely
-            if is_hotspot_active() {
-                let ssid = read_windows_hotspot_ssid();
-                let pass = read_windows_hotspot_password();
-                eprintln!("[Hotspot] Already active: SSID={}, PASS={}", ssid, pass);
-                self.hotspot_rx = None;
-            } else {
-                // Hotspot not active — start it in background but ALWAYS show QR immediately
-                let (tx, rx) = channel();
-                let ssid = read_windows_hotspot_ssid();
-                let pass = read_windows_hotspot_password();
-                // Use config values as fallback, and pass them to the hotspot starter
-                let ssid = if ssid.is_empty() { self.config.wifi_ssid.clone() } else { ssid };
-                let pass = if pass.is_empty() { self.config.wifi_password.clone() } else { pass };
-                let hotspot_result = ensure_hotspot_enabled(&ssid, &pass);
-                let _ = tx.send((ssid, pass, hotspot_result));
-                self.hotspot_rx = Some(rx);
+        // Save current WiFi connection so we can restore it later
+        if self.previous_wifi_conn.is_none() {
+            if let Some(conn) = get_active_wifi_connection() {
+                eprintln!("[WiFi] Saving previous connection: {}", conn);
+                self.previous_wifi_conn = Some(conn);
             }
+        }
+
+        // Generate fresh random credentials for this session
+        let ssid = format!("Zalstudio_{:04}", fastrand::u32(0..10000));
+        let pass = format!("{:08x}", fastrand::u32(0..u32::MAX));
+        self.session_ssid = Some(ssid.clone());
+        self.session_password = Some(pass.clone());
+        // Invalidate old WiFi QR so it regenerates with new credentials
+        self.wifi_qr_texture = None;
+
+        // Stop any existing hotspot so we can reconfigure with new credentials
+        if linux_is_hotspot_active() {
+            let _ = linux_stop_hotspot();
+            std::thread::sleep(std::time::Duration::from_secs(1));
+        }
+
+        let (tx, rx) = channel();
+        let ssid = ssid.clone();
+        let pass = pass.clone();
+        self.hotspot_rx = Some(rx);
+        std::thread::spawn(move || {
+            let result = linux_start_hotspot(&ssid, &pass);
+            let _ = tx.send((ssid, pass, result));
+        });
+    }
+
+    pub fn refresh_server_url(&mut self) {
+        let ip = get_hotspot_ip().unwrap_or_else(local_ip);
+        let new_url = format!("http://{}:{}", ip, self.config.server_port);
+        eprintln!("[Server URL] {}", new_url);
+        self.server_url = Some(new_url.clone());
+        // Force QR code to regenerate with the new URL
+        self.qr_texture = None;
+        let _ = self.qr_tx.send(new_url);
+    }
+
+    pub fn close_mobile_upload(&mut self) {
+        self.session_ssid = None;
+        self.session_password = None;
+        self.wifi_qr_texture = None;
+    }
+
+    pub fn stop_hotspot(&mut self) {
+        let _ = linux_stop_hotspot();
+
+        // Restore previous WiFi connection if we saved one
+        if let Some(conn) = self.previous_wifi_conn.take() {
+            eprintln!("[WiFi] Restoring previous connection: {}", conn);
+            std::thread::spawn(move || {
+                // Give NetworkManager a moment to clean up the hotspot interface
+                std::thread::sleep(std::time::Duration::from_secs(2));
+                let output = std::process::Command::new("nmcli")
+                    .args(["connection", "up", &conn])
+                    .output();
+                match output {
+                    Ok(o) if o.status.success() => {
+                        eprintln!("[WiFi] Reconnected to {}", conn);
+                    }
+                    Ok(o) => {
+                        let stderr = String::from_utf8_lossy(&o.stderr);
+                        eprintln!("[WiFi] Failed to reconnect to {}: {}", conn, stderr.trim());
+                    }
+                    Err(e) => {
+                        eprintln!("[WiFi] nmcli error: {}", e);
+                    }
+                }
+            });
         }
     }
 
-    #[cfg(windows)]
     pub fn check_hotspot_result(&mut self) {
         if let Some(rx) = &self.hotspot_rx {
             if let Ok((_ssid, _pass, result)) = rx.try_recv() {
                 self.hotspot_rx = None;
                 match result {
                     Ok(()) => {
+                        // Hotspot is up — now detect the correct interface IP and refresh QR
+                        std::thread::sleep(std::time::Duration::from_secs(1));
+                        self.refresh_server_url();
                         self.show_toast_long("✅ WiFi-hotspot startad!".into());
                     }
                     Err(e) => {
                         eprintln!("[Hotspot] {}", e);
-                        if e.to_lowercase().contains("admin") {
-                            self.show_toast_long(
-                                "⚠️ WiFi-hotspot kräver admin-rättigheter. \
-                                 QR-koden visas ändå — aktivera hotspot i Windows-inställningarna om den inte redan är på.".into()
-                            );
-                        } else {
-                            self.show_toast_long(format!("WiFi-hotspot: {}. Använd USB-kabel eller aktivera hotspot i Windows-inställningarna.", e));
-                        }
+                        self.show_toast_long(format!("WiFi-hotspot: {}", e));
                     }
                 }
             }
@@ -438,96 +729,101 @@ impl ZalStudio {
         self.phone_connect_start = Some(Instant::now());
         self.phone_poll_last = Instant::now();
 
-        #[cfg(windows)]
         if phone_type == PhoneType::Android {
-            let (cmd_tx, res_rx) = spawn_powershell_worker();
-            self.wpd_cmd_tx = Some(cmd_tx);
-            self.wpd_res_rx = Some(res_rx);
-            self.wpd_folders.clear();
-            self.wpd_photos.clear();
-            self.wpd_selected.clear();
+            let (cmd_tx, res_rx) = spawn_mtp_worker();
+            self.mtp_cmd_tx = Some(cmd_tx);
+            self.mtp_res_rx = Some(res_rx);
+            self.mtp_raw_photos.clear();
+            self.mtp_photos.clear();
+            self.mtp_selected.clear();
         }
     }
 
     pub fn poll_phone_connection(&mut self) {
-        #[cfg(windows)]
-        {
-            let mut wpd_results = Vec::new();
-            if let Some(ref rx) = self.wpd_res_rx {
-                while let Ok(result) = rx.try_recv() {
-                    wpd_results.push(result);
-                }
+        // Collect results from native MTP worker
+        let mut mtp_results = Vec::new();
+        if let Some(ref rx) = self.mtp_res_rx {
+            while let Ok(result) = rx.try_recv() {
+                mtp_results.push(result);
             }
-            for result in wpd_results {
-                match result {
-                    PsResult::Folders(folders) => {
-                        self.wpd_folders = folders;
-                        self.screen = AppScreen::PhoneFolderSelect;
-                    }
-                    PsResult::Photos(photos) => {
-                        self.wpd_photos = photos;
-                        self.wpd_selected = vec![false; self.wpd_photos.len()];
-                        self.screen = AppScreen::WiredPhonePicker;
-                    }
-                    PsResult::Downloaded { count } => {
-                        self.import_status = format!("{} bilder importerade", count);
-                        self.rescan();
-                        self.screen = AppScreen::Gallery;
-                        self.show_toast(format!("{} bilder importerade", count));
-                        // Clean up WPD channels
-                        self.wpd_cmd_tx = None;
-                        self.wpd_res_rx = None;
-                    }
-                    PsResult::Error(e) => {
-                        self.show_toast_long(format!("Fel: {}", e));
-                        self.screen = AppScreen::MobileMenu;
-                        self.wpd_cmd_tx = None;
-                        self.wpd_res_rx = None;
-                    }
+        }
+        for result in mtp_results {
+            match result {
+                MtpResult::Photos(photos) => {
+                    self.mtp_raw_photos = photos.clone();
+                    self.mtp_photos = photos
+                        .iter()
+                        .map(|p| crate::wired_import::PhonePhoto {
+                            path: std::path::PathBuf::from(&p.filename),
+                            file_name: p.filename.clone(),
+                            file_size: p.size,
+                        })
+                        .collect();
+                    self.mtp_selected = vec![false; self.mtp_photos.len()];
+                    self.screen = AppScreen::WiredPhonePicker;
                 }
-            }
-
-            // If we're in PhoneConnecting and it's been a while, try listing folders
-            if self.screen == AppScreen::PhoneConnecting {
-                if let Some(ref tx) = self.wpd_cmd_tx {
-                    let _ = tx.send(PsCommand::ListFolders);
+                MtpResult::Downloaded { count } => {
+                    self.import_status = format!("{} bilder importerade", count);
+                    self.rescan();
+                    self.enter_preview_for_imported();
+                    self.show_toast(format!("{} bilder importerade", count));
+                    self.mtp_cmd_tx = None;
+                    self.mtp_res_rx = None;
+                }
+                MtpResult::Error(e) => {
+                    self.show_toast_long(format!("Fel: {}", e));
+                    self.screen = AppScreen::MobileMenu;
+                    self.mtp_cmd_tx = None;
+                    self.mtp_res_rx = None;
                 }
             }
         }
 
-        #[cfg(target_os = "linux")]
-        {
-            // Linux: check for GVFS mounts
+        // If still connecting, try both native MTP and GVFS
+        if self.screen == AppScreen::PhoneConnecting {
+            // Request native MTP listing (if worker is running)
+            if let Some(ref tx) = self.mtp_cmd_tx {
+                let _ = tx.send(MtpCommand::ListPhotos);
+            }
+
+            // Also check GVFS mounts as parallel fallback
             let mounts = crate::wired_import::find_phone_mounts();
             if !mounts.is_empty() {
-                self.phone_photos = crate::wired_import::list_phone_photos(&mounts[0]);
-                self.phone_selected = vec![false; self.phone_photos.len()];
-                self.screen = AppScreen::WiredPhonePicker;
+                let photos = crate::wired_import::list_phone_photos(&mounts[0]);
+                if !photos.is_empty() {
+                    self.phone_photos = photos;
+                    self.phone_selected = vec![false; self.phone_photos.len()];
+                    // Use phone_photos for the unified UI via mtp_photos
+                    self.mtp_photos = self.phone_photos.clone();
+                    self.mtp_selected = vec![false; self.mtp_photos.len()];
+                    // GVFS found photos — stop native MTP worker
+                    self.mtp_cmd_tx = None;
+                    self.mtp_res_rx = None;
+                    self.mtp_raw_photos.clear();
+                    self.screen = AppScreen::WiredPhonePicker;
+                }
             }
         }
     }
 
-    pub fn open_phone_folder(&mut self, folder_path: String) {
-        #[cfg(windows)]
-        {
-            if let Some(ref tx) = self.wpd_cmd_tx {
-                let _ = tx.send(PsCommand::ListPhotos { folder_path });
-            }
-        }
+    pub fn open_phone_folder(&mut self, _folder_path: String) {
+        // No-op on Linux — native MTP does not use folder selection
     }
 
     pub fn import_selected_phone_photos(&mut self) {
-        #[cfg(windows)]
-        {
-            let selected: Vec<PsPhoto> = self.wpd_photos.iter()
+        if self.mtp_cmd_tx.is_some() && !self.mtp_raw_photos.is_empty() {
+            // Native MTP download
+            let selected: Vec<MtpPhoto> = self
+                .mtp_raw_photos
+                .iter()
                 .enumerate()
-                .filter(|(i, _)| self.wpd_selected.get(*i).copied().unwrap_or(false))
+                .filter(|(i, _)| self.mtp_selected.get(*i).copied().unwrap_or(false))
                 .map(|(_, p)| p.clone())
                 .collect();
 
             if !selected.is_empty() {
-                if let Some(ref tx) = self.wpd_cmd_tx {
-                    let _ = tx.send(PsCommand::Download {
+                if let Some(ref tx) = self.mtp_cmd_tx {
+                    let _ = tx.send(MtpCommand::Download {
                         photos: selected,
                         dest_dir: self.config.temp_directory.clone(),
                     });
@@ -535,28 +831,48 @@ impl ZalStudio {
                     self.import_status = "Laddar ner bilder...".to_string();
                 }
             }
-        }
-
-        #[cfg(target_os = "linux")]
-        {
-            let selected: Vec<&crate::wired_import::PhonePhoto> = self.phone_photos.iter()
+        } else {
+            // GVFS / USB filesystem copy
+            let selected: Vec<&crate::wired_import::PhonePhoto> = self
+                .phone_photos
+                .iter()
                 .enumerate()
                 .filter(|(i, _)| self.phone_selected.get(*i).copied().unwrap_or(false))
                 .map(|(_, p)| p)
                 .collect();
 
-            let mut count = 0;
-            for photo in selected {
-                let dest = self.config.temp_directory.join(&photo.file_name);
-                if std::fs::copy(&photo.path, dest).is_ok() {
-                    count += 1;
-                }
+            if !selected.is_empty() {
+                self.screen = AppScreen::Importing;
+                self.import_status = "Importerar valda bilder...".to_string();
+                let dest = self.config.temp_directory.clone();
+                let (tx, rx) = channel::<crate::usb_detect::UsbResult>();
+                let selected_owned: Vec<crate::wired_import::PhonePhoto> =
+                    selected.iter().map(|p| (*p).clone()).collect();
+                std::thread::spawn(move || {
+                    let _ = std::fs::create_dir_all(&dest);
+                    // Clean out previous temp imports so the gallery stays manageable
+                    eprintln!("[IMPORT-THREAD] Clearing old temp imports...");
+                    let _ = crate::wired_import::clear_temp_imports(&dest);
+                    eprintln!(
+                        "[IMPORT-THREAD] Copying {} selected photos...",
+                        selected_owned.len()
+                    );
+                    let mut count = 0;
+                    for photo in &selected_owned {
+                        let dest_path = dest.join(&photo.file_name);
+                        if std::fs::copy(&photo.path, &dest_path).is_ok() {
+                            count += 1;
+                        }
+                    }
+                    eprintln!(
+                        "[IMPORT-THREAD] Done, copied {}/{} files",
+                        count,
+                        selected_owned.len()
+                    );
+                    let _ = tx.send(crate::usb_detect::UsbResult::Imported(count));
+                });
+                self.usb_rx = Some(rx);
             }
-
-            self.import_status = format!("{} bilder importerade", count);
-            self.rescan();
-            self.screen = AppScreen::Gallery;
-            self.show_toast(format!("{} bilder importerade", count));
         }
     }
 
@@ -564,7 +880,10 @@ impl ZalStudio {
     // Google Drive
     // ========================================================================
     pub fn start_google_photos_auth(&mut self) {
-        let pkce = crate::google_drive::generate_pkce(format!("http://localhost:{}/oauth", self.config.server_port));
+        let pkce = crate::google_drive::generate_pkce(format!(
+            "http://localhost:{}/oauth",
+            self.config.server_port
+        ));
         self.pkce_state = Some(pkce.clone());
         let auth_url = crate::google_drive::build_auth_url(
             &self.config.google_client_id,
@@ -572,31 +891,31 @@ impl ZalStudio {
             &pkce.state,
             &pkce.code_challenge,
         );
-        #[cfg(windows)]
-        {
-            let _ = std::process::Command::new("rundll32")
-                .args(["url.dll,FileProtocolHandler", &auth_url])
-                .spawn();
-        }
-        #[cfg(target_os = "linux")]
-        {
-            let _ = std::process::Command::new("xdg-open")
-                .arg(&auth_url)
-                .spawn();
-        }
+        let _ = std::process::Command::new("xdg-open")
+            .arg(&auth_url)
+            .spawn();
     }
 
-    pub fn drive_thumbnail(&mut self, ctx: &Context, file_id: &str, url: &str) -> Option<&TextureHandle> {
+    pub fn drive_thumbnail(
+        &mut self,
+        ctx: &Context,
+        file_id: &str,
+        url: &str,
+    ) -> Option<&TextureHandle> {
         if !self.drive_thumbnails.contains_key(file_id) {
             if let Ok(response) = ureq::get(url).call() {
                 if let Ok(bytes) = response.into_body().read_to_vec() {
                     if let Ok(image) = image::load_from_memory(&bytes) {
                         let size = 128;
-                        let image = image.resize_to_fill(size, size, image::imageops::FilterType::Triangle);
+                        let image =
+                            image.resize_to_fill(size, size, image::imageops::FilterType::Triangle);
                         let rgba = image.to_rgba8();
                         let tex = ctx.load_texture(
                             file_id,
-                            egui::ColorImage::from_rgba_unmultiplied([size as usize, size as usize], &rgba.into_raw()),
+                            egui::ColorImage::from_rgba_unmultiplied(
+                                [size as usize, size as usize],
+                                &rgba.into_raw(),
+                            ),
                             egui::TextureOptions::default(),
                         );
                         self.drive_thumbnails.insert(file_id.to_string(), tex);
@@ -609,7 +928,9 @@ impl ZalStudio {
 
     pub fn download_selected_drive_files(&mut self) {
         if let Some(token) = &self.drive_access_token {
-            let selected: Vec<String> = self.drive_files.iter()
+            let selected: Vec<String> = self
+                .drive_files
+                .iter()
                 .enumerate()
                 .filter(|(i, _)| self.drive_selected.get(*i).copied().unwrap_or(false))
                 .map(|(_, f)| f.id.clone())
@@ -636,7 +957,9 @@ impl ZalStudio {
 
     pub fn download_selected_google_photos(&mut self) {
         if let Some(token) = &self.drive_access_token {
-            let selected: Vec<String> = self.photo_items.iter()
+            let selected: Vec<String> = self
+                .photo_items
+                .iter()
                 .enumerate()
                 .filter(|(i, _)| self.photo_selected.get(*i).copied().unwrap_or(false))
                 .map(|(_, p)| p.id.clone())
@@ -698,7 +1021,7 @@ impl eframe::App for ZalStudio {
                     let count: usize = url.trim_start_matches("DOWNLOADED:").parse().unwrap_or(0);
                     self.import_status = format!("{} bilder importerade", count);
                     self.rescan();
-                    self.screen = AppScreen::Gallery;
+                    self.enter_preview_for_imported();
                     self.show_toast(format!("{} bilder importerade", count));
                 } else if let Some(tex) = generate_qr_texture(ctx, &url) {
                     self.qr_texture = Some(tex);
@@ -706,15 +1029,97 @@ impl eframe::App for ZalStudio {
             }
         }
 
-        // Check hotspot result on Windows
-        #[cfg(windows)]
+        // Check hotspot result
         self.check_hotspot_result();
+
+        // Poll USB background worker (used both during plug-wait and importing)
+        if self.screen == AppScreen::UsbPlugWait || self.screen == AppScreen::Importing {
+            if let Some(ref rx) = self.usb_rx {
+                match rx.try_recv() {
+                    Ok(result) => {
+                        eprintln!("[USB-MAIN] Received result: {:?}", result);
+                        self.handle_usb_result(result);
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        eprintln!("[USB-MAIN] Worker disconnected unexpectedly");
+                        self.usb_rx = None;
+                        self.screen = AppScreen::SourceSelect;
+                        self.show_toast_long("USB-import misslyckades".into());
+                    }
+                }
+            }
+        }
 
         // Poll phone connection
         if self.screen == AppScreen::PhoneConnecting {
             if self.phone_poll_last.elapsed() > Duration::from_secs(1) {
                 self.phone_poll_last = Instant::now();
                 self.poll_phone_connection();
+            }
+        }
+
+        // Poll MTP download results during import
+        if self.screen == AppScreen::Importing && self.mtp_res_rx.is_some() {
+            let mut mtp_results = Vec::new();
+            if let Some(ref rx) = self.mtp_res_rx {
+                while let Ok(result) = rx.try_recv() {
+                    mtp_results.push(result);
+                }
+            }
+            for result in mtp_results {
+                match result {
+                    MtpResult::Downloaded { count } => {
+                        self.import_status = format!("{} bilder importerade", count);
+                        self.rescan();
+                        self.enter_preview_for_imported();
+                        self.show_toast(format!("{} bilder importerade", count));
+                        self.mtp_cmd_tx = None;
+                        self.mtp_res_rx = None;
+                    }
+                    MtpResult::Error(e) => {
+                        self.show_toast_long(format!("Fel: {}", e));
+                        self.screen = AppScreen::Gallery;
+                        self.mtp_cmd_tx = None;
+                        self.mtp_res_rx = None;
+                    }
+                    MtpResult::Photos(_) => {}
+                }
+            }
+        }
+
+        // Poll thumbnail background loader
+        let mut thumbs_received = 0;
+        if let Some(ref rx) = self.thumb_rx {
+            while let Ok((key, color_image)) = rx.try_recv() {
+                let tex = ctx.load_texture(&key, color_image, egui::TextureOptions::default());
+                self.textures.insert(key, tex);
+                thumbs_received += 1;
+            }
+        }
+        if thumbs_received > 0 {
+            ctx.request_repaint();
+        }
+
+        // Stop thumbnail worker when leaving picker to free CPU/GPU resources
+        if self.screen != AppScreen::WiredPhonePicker && self.thumb_rx.is_some() {
+            eprintln!("[THUMB] Stopping thumbnail worker because screen changed");
+            self.thumb_rx = None;
+        }
+
+        // Keep repainting picker while thumbnails are still loading
+        if self.screen == AppScreen::WiredPhonePicker {
+            let photos = if self.phone_type == PhoneType::Android && cfg!(target_os = "linux") {
+                &self.mtp_photos
+            } else {
+                &self.phone_photos
+            };
+            let pending = photos.iter().any(|p| {
+                let key = p.path.to_string_lossy().to_string();
+                !self.textures.contains_key(&key)
+            });
+            if pending {
+                ctx.request_repaint();
             }
         }
 
@@ -725,6 +1130,81 @@ impl eframe::App for ZalStudio {
 // ============================================================================
 // Helpers
 // ============================================================================
+
+/// Parse a paper size like "10x15" into width/height aspect ratio.
+fn paper_size_aspect(size: &str) -> f32 {
+    let parts: Vec<&str> = size.split('x').collect();
+    if parts.len() == 2 {
+        let w = parts[0].parse::<f32>().unwrap_or(1.0);
+        let h = parts[1].parse::<f32>().unwrap_or(1.0);
+        if h > 0.0 {
+            return w / h;
+        }
+    }
+    1.0
+}
+
+/// Apply rotation, grayscale, zoom-crop to an image and save to temp file.
+/// Returns the path to the rendered file.
+pub fn render_edited_photo(
+    src_path: &Path,
+    edit: &PhotoEdit,
+    paper_size: &str,
+    temp_dir: &Path,
+) -> Result<PathBuf, String> {
+    let mut img = image::open(src_path).map_err(|e| e.to_string())?;
+
+    // Apply rotation
+    img = match edit.rotation {
+        90 => img.rotate90(),
+        180 => img.rotate180(),
+        270 => img.rotate270(),
+        _ => img,
+    };
+
+    // Apply grayscale
+    if edit.grayscale {
+        img = img.grayscale();
+    }
+
+    // Calculate crop in pixel coords (after rotation)
+    let (img_w, img_h) = (img.width() as f32, img.height() as f32);
+    let frame_aspect = paper_size_aspect(paper_size);
+    let eff_aspect = img_w / img_h.max(1.0);
+
+    let (mut crop_w, mut crop_h) = if eff_aspect >= frame_aspect {
+        (frame_aspect / eff_aspect * img_w, img_h)
+    } else {
+        (img_w, eff_aspect / frame_aspect * img_h)
+    };
+
+    crop_w = (crop_w / edit.zoom).max(1.0);
+    crop_h = (crop_h / edit.zoom).max(1.0);
+
+    let max_px = (img_w - crop_w).max(0.0);
+    let max_py = (img_h - crop_h).max(0.0);
+    let mut cx = (0.5 + edit.pan_x * 0.5 * max_px / img_w.max(1.0) - crop_w / img_w / 2.0) * img_w;
+    let mut cy = (0.5 + edit.pan_y * 0.5 * max_py / img_h.max(1.0) - crop_h / img_h / 2.0) * img_h;
+    cx = cx.max(0.0).min(img_w - crop_w);
+    cy = cy.max(0.0).min(img_h - crop_h);
+
+    let cropped = img.crop_imm(cx as u32, cy as u32, crop_w as u32, crop_h as u32);
+
+    // Save to temp
+    let file_name = format!(
+        "edit_{}_{}.jpg",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis(),
+        fastrand::u32(..)
+    );
+    let out_path = temp_dir.join(&file_name);
+    cropped.save(&out_path).map_err(|e| e.to_string())?;
+
+    Ok(out_path)
+}
+
 fn load_texture(ctx: &Context, path: &Path) -> Option<TextureHandle> {
     let image = image::open(path).ok()?;
     let size = 256;
@@ -735,6 +1215,67 @@ fn load_texture(ctx: &Context, path: &Path) -> Option<TextureHandle> {
         egui::ColorImage::from_rgba_unmultiplied([size as usize, size as usize], &rgba.into_raw()),
         egui::TextureOptions::default(),
     ))
+}
+
+// ============================================================================
+// Fast EXIF thumbnail extraction — most cameras embed a tiny JPEG thumbnail
+// ============================================================================
+fn find_exif_app1_offset(buf: &[u8]) -> Option<usize> {
+    let mut i = 0;
+    while i + 10 < buf.len() {
+        if buf[i] == 0xFF && buf[i + 1] == 0xE1 && &buf[i + 4..i + 10] == b"Exif\0\0" {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
+fn extract_exif_thumbnail(path: &Path) -> Option<image::DynamicImage> {
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut buf = vec![0u8; 65536];
+    let n = std::io::Read::read(&mut file, &mut buf).ok()?;
+    buf.truncate(n);
+
+    let exif = exif::Reader::new()
+        .read_from_container(&mut std::io::BufReader::new(std::io::Cursor::new(&buf)))
+        .ok()?;
+
+    let offset = exif
+        .get_field(exif::Tag::JPEGInterchangeFormat, exif::In::THUMBNAIL)?
+        .value
+        .get_uint(0)? as usize;
+    let len = exif
+        .get_field(exif::Tag::JPEGInterchangeFormatLength, exif::In::THUMBNAIL)?
+        .value
+        .get_uint(0)? as usize;
+
+    let app1_offset = find_exif_app1_offset(&buf)?;
+    let tiff_header_offset = app1_offset + 4 + 6; // marker(2) + length(2) + "Exif\0\0"(6)
+    let abs_offset = tiff_header_offset + offset;
+
+    if abs_offset + len > buf.len() {
+        // Thumbnail extends past the 64KB we read — fall back to full decode
+        return None;
+    }
+
+    let thumb_bytes = &buf[abs_offset..abs_offset + len];
+    image::load_from_memory(thumb_bytes).ok()
+}
+
+fn thumbnail_color_image(path: &Path, target_size: u32) -> Option<egui::ColorImage> {
+    // Try EXIF thumbnail first — cameras embed a tiny JPEG (~5KB) that's almost instant to read
+    let img = extract_exif_thumbnail(path).or_else(|| image::open(path).ok())?;
+    let thumb = img.thumbnail_exact(target_size, target_size);
+    let rgba = thumb.to_rgba8();
+    let pixels: Vec<egui::Color32> = rgba
+        .pixels()
+        .map(|p| egui::Color32::from_rgba_unmultiplied(p[0], p[1], p[2], p[3]))
+        .collect();
+    Some(egui::ColorImage {
+        size: [target_size as usize, target_size as usize],
+        pixels,
+    })
 }
 
 fn generate_qr_texture(ctx: &Context, data: &str) -> Option<TextureHandle> {
@@ -770,361 +1311,392 @@ fn generate_qr_texture(ctx: &Context, data: &str) -> Option<TextureHandle> {
 }
 
 fn local_ip() -> String {
-    // Try to get a reasonable local IP
-    #[cfg(windows)]
-    {
-        if let Ok(output) = std::process::Command::new("powershell")
-            .args(["-NoProfile", "-Command", "(Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.IPAddress -like '192.168.*' -or $_.IPAddress -like '10.*' -or $_.IPAddress -like '172.*' } | Select-Object -First 1).IPAddress"])
-            .output()
-        {
-            let ip = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !ip.is_empty() {
-                return ip;
+    // Trick: connect a UDP socket to a non-routable address.
+    // This forces the OS to pick an interface without sending any packets.
+    if let Ok(socket) = std::net::UdpSocket::bind("0.0.0.0:0") {
+        if socket.connect("10.255.255.255:1").is_ok() {
+            if let Ok(addr) = socket.local_addr() {
+                let ip = addr.ip().to_string();
+                if ip != "0.0.0.0" && !ip.starts_with("127.") {
+                    return ip;
+                }
             }
         }
     }
-    "localhost".to_string()
+
+    // Fallback: try connecting to external host to discover our IP
+    if let Ok(addrs) = std::net::TcpStream::connect("8.8.8.8:80") {
+        if let Ok(addr) = addrs.local_addr() {
+            return addr.ip().to_string();
+        }
+    }
+
+    // Last resort: hostname lookup
+    if let Ok(output) = std::process::Command::new("hostname").args(["-I"]).output() {
+        let ip = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !ip.is_empty() {
+            return ip.split_whitespace().next().unwrap_or(&ip).to_string();
+        }
+    }
+
+    "127.0.0.1".to_string()
 }
 
-// ============================================================================
-// Windows Hotspot info
-// ============================================================================
-#[cfg(windows)]
-fn read_hotspot_from_netsh(field: &str) -> Option<String> {
-    let cmd = if field == "SSID name" {
-        format!("netsh wlan show hostednetwork 2>$null | Select-String '{}'", field)
-    } else {
-        format!("netsh wlan show hostednetwork setting=security 2>$null | Select-String '{}'", field)
-    };
-    let output = std::process::Command::new("powershell.exe")
-        .args(["-NoProfile", "-Command", &cmd])
+/// Escape special characters in Wi-Fi QR code SSID / password fields.
+fn wifi_qr_escape(input: &str) -> String {
+    input
+        .replace('\\', "\\\\")
+        .replace(';', "\\;")
+        .replace(',', "\\,")
+        .replace(':', "\\:")
+        .replace('"', "\\\"")
+}
+
+/// Try to discover the IP address of the active hotspot interface.
+fn get_hotspot_ip() -> Option<String> {
+    // Query NetworkManager for the IP of our hotspot connection
+    if let Ok(output) = std::process::Command::new("nmcli")
+        .args([
+            "-t",
+            "-f",
+            "IP4.ADDRESS",
+            "connection",
+            "show",
+            "--active",
+            HOTSPOT_CONN_NAME,
+        ])
         .output()
-        .ok()?;
-    let out = String::from_utf8_lossy(&output.stdout);
-    out.split(':').nth(1).map(|s| s.trim().trim_matches('"').to_string())
+    {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for line in stdout.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            // nmcli -t output: "IP4.ADDRESS[1]:10.42.0.1/24"
+            // Strip the field name prefix, then the CIDR suffix
+            let value = line.split(':').nth(1).unwrap_or(line);
+            let ip = value.split('/').next().unwrap_or(value);
+            if !ip.is_empty() {
+                eprintln!("[Hotspot IP] nmcli returned: {}", ip);
+                return Some(ip.to_string());
+            }
+        }
+    }
+
+    // Fallback: look at all active connections for any AP/hotspot mode
+    if let Ok(output) = std::process::Command::new("nmcli")
+        .args([
+            "-t",
+            "-f",
+            "NAME,DEVICE,TYPE",
+            "connection",
+            "show",
+            "--active",
+        ])
+        .output()
+    {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for line in stdout.lines() {
+            let parts: Vec<&str> = line.split(':').collect();
+            if parts.len() >= 3 && parts[2].to_lowercase().contains("wireless") {
+                let device = parts[1];
+                // Get IP of this device
+                if let Ok(ip_output) = std::process::Command::new("nmcli")
+                    .args(["-t", "-f", "IP4.ADDRESS", "device", "show", device])
+                    .output()
+                {
+                    let ip_stdout = String::from_utf8_lossy(&ip_output.stdout);
+                    for ip_line in ip_stdout.lines() {
+                        let ip_line = ip_line.trim();
+                        if let Some(ip) = ip_line.split('/').next() {
+                            if !ip.is_empty() && !ip.starts_with("127.") {
+                                eprintln!("[Hotspot IP] device {} returned: {}", device, ip);
+                                return Some(ip.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    None
 }
 
-#[cfg(windows)]
-fn read_windows_hotspot_value(name: &str) -> Option<String> {
-    let cmd = format!(
-        "Get-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Services\\icssvc\\Settings' -Name '{}' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty '{}'",
-        name, name
+// ============================================================================
+// Linux Hotspot via NetworkManager (nmcli)
+// ============================================================================
+const HOTSPOT_CONN_NAME: &str = "ZalStudio-Hotspot";
+
+fn linux_start_hotspot(ssid: &str, pass: &str) -> Result<(), String> {
+    if linux_is_hotspot_active() {
+        eprintln!("[Hotspot] Already active");
+        return Ok(());
+    }
+
+    // Clean up leftover connections from previous runs
+    for name in &[HOTSPOT_CONN_NAME, &format!("Hotspot-{}", ssid)[..]] {
+        let _ = std::process::Command::new("nmcli")
+            .args(["connection", "delete", name])
+            .output();
+    }
+
+    // Find a WiFi device that supports AP mode
+    let device = linux_find_ap_device();
+    eprintln!("[Hotspot] AP-capable device: {:?}", device);
+
+    let device = device.ok_or(
+        "Ingen WiFi-adapter med AP-stöd hittades. Kontrollera att en WiFi-adapter stöder Access Point-läge."
+    )?;
+
+    // If the device is currently connected to WiFi, disconnect it first
+    let was_connected = linux_device_connected(&device);
+    if was_connected {
+        eprintln!("[Hotspot] Disconnecting {} from current network...", device);
+        let _ = std::process::Command::new("nmcli")
+            .args(["device", "disconnect", &device])
+            .output();
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    }
+
+    // Strategy 1: nmcli device wifi hotspot (one-shot)
+    let mut cmd = std::process::Command::new("nmcli");
+    cmd.args([
+        "device",
+        "wifi",
+        "hotspot",
+        "ifname",
+        &device,
+        "con-name",
+        HOTSPOT_CONN_NAME,
+        "ssid",
+        ssid,
+        "band",
+        "bg",
+        "channel",
+        "6",
+    ]);
+    if !pass.is_empty() {
+        cmd.args(["password", pass]);
+    }
+
+    let output = cmd.output().map_err(|e| format!("nmcli: {}", e))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    eprintln!("[Hotspot] nmcli hotspot stdout: {}", stdout.trim());
+    if !stderr.trim().is_empty() {
+        eprintln!("[Hotspot] nmcli hotspot stderr: {}", stderr.trim());
+    }
+
+    if output.status.success() {
+        std::thread::sleep(std::time::Duration::from_secs(3));
+        if linux_is_hotspot_active() {
+            return Ok(());
+        }
+    }
+
+    // Clean up if strategy 1 failed
+    let _ = std::process::Command::new("nmcli")
+        .args(["connection", "delete", HOTSPOT_CONN_NAME])
+        .output();
+
+    // Strategy 2: explicit connection add + up
+    let mut add_cmd = std::process::Command::new("nmcli");
+    add_cmd.args([
+        "connection",
+        "add",
+        "save",
+        "no",
+        "type",
+        "wifi",
+        "ifname",
+        &device,
+        "con-name",
+        HOTSPOT_CONN_NAME,
+        "autoconnect",
+        "no",
+        "ssid",
+        ssid,
+        "mode",
+        "ap",
+        "802-11-wireless.band",
+        "bg",
+        "802-11-wireless.channel",
+        "6",
+        "ipv4.method",
+        "shared",
+    ]);
+    if !pass.is_empty() {
+        add_cmd.args(["wifi-sec.key-mgmt", "wpa-psk", "wifi-sec.psk", pass]);
+    }
+
+    let add_output = add_cmd.output().map_err(|e| format!("nmcli add: {}", e))?;
+    eprintln!(
+        "[Hotspot] add stdout: {}",
+        String::from_utf8_lossy(&add_output.stdout).trim()
     );
-    let output = std::process::Command::new("powershell.exe")
-        .args(["-NoProfile", "-Command", &cmd])
-        .output()
-        .ok()?;
-    let out = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if out.is_empty() { None } else { Some(out) }
-}
-
-#[cfg(windows)]
-pub fn read_windows_hotspot_ssid() -> String {
-    read_hotspot_from_netsh("SSID name")
-        .or_else(|| read_windows_hotspot_value("SSID"))
-        .unwrap_or_default()
-}
-
-#[cfg(windows)]
-pub fn read_windows_hotspot_password() -> String {
-    read_hotspot_from_netsh("User security key")
-        .or_else(|| read_windows_hotspot_value("Passphrase"))
-        .unwrap_or_default()
-}
-
-/// Check if any Windows hotspot (old hostednetwork or modern Mobile Hotspot) is active.
-#[cfg(windows)]
-fn is_hotspot_active() -> bool {
-    // Method 1: Old netsh hostednetwork
-    if let Ok(o) = std::process::Command::new("powershell.exe")
-        .args(["-NoProfile", "-Command", "netsh wlan show hostednetwork 2>$null | Select-String 'Status'"])
-        .output()
-    {
-        let out = String::from_utf8_lossy(&o.stdout);
-        if out.to_lowercase().contains("started") {
-            return true;
-        }
+    let add_stderr = String::from_utf8_lossy(&add_output.stderr);
+    if !add_stderr.trim().is_empty() {
+        eprintln!("[Hotspot] add stderr: {}", add_stderr.trim());
     }
-    // Method 2: Modern Mobile Hotspot — check for active WiFi Direct virtual adapter
-    if let Ok(o) = std::process::Command::new("powershell.exe")
-        .args(["-NoProfile", "-Command",
-            "Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object { $_.InterfaceDescription -match 'Wi-Fi Direct|Virtual Hosted Network' -and $_.Status -eq 'Up' } | Select-Object -First 1"
+
+    if !add_output.status.success() {
+        return Err(format!("Kunde inte skapa hotspot: {}", add_stderr.trim()));
+    }
+
+    let up_output = std::process::Command::new("nmcli")
+        .args(["connection", "up", HOTSPOT_CONN_NAME, "ifname", &device])
+        .output()
+        .map_err(|e| format!("nmcli up: {}", e))?;
+
+    let up_stderr = String::from_utf8_lossy(&up_output.stderr);
+    eprintln!(
+        "[Hotspot] up stdout: {}",
+        String::from_utf8_lossy(&up_output.stdout).trim()
+    );
+    if !up_stderr.trim().is_empty() {
+        eprintln!("[Hotspot] up stderr: {}", up_stderr.trim());
+    }
+
+    if up_output.status.success() {
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        return Ok(());
+    }
+
+    Err(format!("Kunde inte starta hotspot: {}", up_stderr.trim()))
+}
+
+fn linux_is_hotspot_active() -> bool {
+    if let Ok(output) = std::process::Command::new("nmcli")
+        .args([
+            "-t",
+            "-f",
+            "NAME,DEVICE,TYPE",
+            "connection",
+            "show",
+            "--active",
         ])
         .output()
     {
-        let out = String::from_utf8_lossy(&o.stdout);
-        if out.trim().lines().count() >= 2 { // header + data line
-            return true;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for line in stdout.lines() {
+            let lower = line.to_lowercase();
+            if lower.contains("hotspot") || lower.contains("zalstudio-hotspot") {
+                return true;
+            }
         }
     }
-    // Method 3: Check if a 192.168.137.x gateway exists (Mobile Hotspot default subnet)
-    if let Ok(o) = std::process::Command::new("powershell.exe")
-        .args(["-NoProfile", "-Command",
-            "Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | Where-Object { $_.NextHop -like '192.168.137.*' } | Select-Object -First 1"
-        ])
-        .output()
-    {
-        let out = String::from_utf8_lossy(&o.stdout);
-        if !out.trim().is_empty() {
+    false
+}
+
+/// Find a WiFi device that supports AP (Access Point) mode.
+/// Checks /sys/class/net/<dev>/phy80211/name to map device -> phy,
+/// then runs `iw phy<N> info` to check for AP support.
+fn linux_find_ap_device() -> Option<String> {
+    let devs = linux_wifi_devices();
+    for dev in devs {
+        if linux_device_supports_ap(&dev) {
+            return Some(dev);
+        }
+    }
+    None
+}
+
+fn linux_wifi_devices() -> Vec<String> {
+    let output = std::process::Command::new("nmcli")
+        .args(["-t", "-f", "DEVICE,TYPE", "device", "status"])
+        .output();
+    let Ok(output) = output else {
+        return Vec::new();
+    };
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    stdout
+        .lines()
+        .filter_map(|line| {
+            let parts: Vec<&str> = line.split(':').collect();
+            if parts.len() >= 2 && parts[1] == "wifi" {
+                Some(parts[0].to_string())
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn linux_device_supports_ap(device: &str) -> bool {
+    // Read phy name from /sys/class/net/<device>/phy80211/name
+    let phy_path = format!("/sys/class/net/{}/phy80211/name", device);
+    let phy_name = std::fs::read_to_string(&phy_path)
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+
+    if phy_name.is_empty() {
+        return false;
+    }
+
+    // Run `iw phyN info` and check for "AP" in supported interface modes
+    let output = std::process::Command::new("iw")
+        .args([&format!("{}.info", phy_name)])
+        .output();
+
+    // That's not the right iw syntax. Use: iw phy phyN info
+    let output = std::process::Command::new("iw")
+        .args(["phy", &phy_name, "info"])
+        .output();
+
+    let Ok(output) = output else { return false };
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Look for " * AP" in the Supported interface modes section
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        if trimmed == "* AP" {
             return true;
         }
     }
     false
 }
 
-#[cfg(windows)]
-pub fn ensure_hotspot_enabled(ssid: &str, pass: &str) -> Result<(), String> {
-    // If already active, nothing to do.
-    if is_hotspot_active() {
-        return Ok(());
-    }
-
-    // Check if hosted network is supported by the driver
-    let check = std::process::Command::new("powershell.exe")
-        .args(["-NoProfile", "-Command", "netsh wlan show drivers | findstr 'Hosted network supported'"])
+fn linux_device_connected(device: &str) -> bool {
+    let output = std::process::Command::new("nmcli")
+        .args(["-t", "-f", "DEVICE,STATE", "device", "status"])
         .output();
-    let hosted_supported = match check {
-        Ok(o) => String::from_utf8_lossy(&o.stdout).to_lowercase().contains("yes"),
-        Err(_) => false,
-    };
-
-    if !hosted_supported {
-        // Try modern Mobile Hotspot API (Windows 10/11)
-        return ensure_modern_mobile_hotspot(ssid, pass);
-    }
-
-    // Build a PowerShell script that configures + starts the hosted network.
-    // This requires admin privileges. We do NOT check admin via .NET API —
-    // instead we just run netsh and let Windows tell us if admin is missing.
-    let script = format!(r#"
-# Disconnect from any existing WiFi first (hosted network needs the adapter free)
-netsh wlan disconnect 2>$null | Out-Null
-Start-Sleep -Milliseconds 500
-
-# Configure the hosted network — capture ALL output (stdout + stderr)
-$output1 = (netsh wlan set hostednetwork mode=allow ssid="{ssid}" key="{pass}") 2>&1 | Out-String
-Write-Output ("SET_OUTPUT:" + $output1.Trim())
-
-# Start the hosted network
-$output2 = (netsh wlan start hostednetwork) 2>&1 | Out-String
-Write-Output ("START_OUTPUT:" + $output2.Trim())
-
-# Verify status
-$status = (netsh wlan show hostednetwork | Select-String 'Status') | Out-String
-Write-Output ("STATUS:" + $status.Trim())
-"#, ssid = ssid, pass = pass);
-
-    let temp_path = std::env::temp_dir().join("zalstudio_start_hotspot.ps1");
-    let _ = std::fs::write(&temp_path, &script);
-    let output = std::process::Command::new("powershell.exe")
-        .args([
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-File",
-            temp_path.to_str().unwrap_or(""),
-        ])
-        .output();
-
-    match output {
-        Ok(o) => {
-            let stderr = String::from_utf8_lossy(&o.stderr).trim().to_string();
-            let text = String::from_utf8_lossy(&o.stdout).trim().to_string();
-            eprintln!("[Hotspot script] FULL OUTPUT:\n{}", text);
-            if !stderr.is_empty() {
-                eprintln!("[Hotspot script] STDERR:\n{}", stderr);
-            }
-
-            let text_lower = text.to_lowercase();
-
-            // Check for admin privilege message anywhere in output
-            if text_lower.contains("administrator privilege") || text_lower.contains("administratörsbehörighet") {
-                return Err(
-                    "WiFi-hotspot kräver admin-rättigheter. \
-                     Starta appen som administratör, eller aktivera Mobile Hotspot manuellt i Windows-inställningarna.".into()
-                );
-            }
-
-            // Check for success indicators
-            if text_lower.contains("the hosted network started") || text_lower.contains("started") {
-                return Ok(());
-            }
-
-            // Check for explicit failure messages
-            if text_lower.contains("could not be started") || text_lower.contains("couldn't be started") {
-                return Err(format!("Hotspot kunde inte startas. Kontrollera att WiFi-adaptern är på och inte upptagen.\n\nDetaljer:\n{}", text));
-            }
-
-            // Unknown result — return everything for debugging
-            Err(format!("Hotspot kunde inte startas:\n{}", text))
+    let Ok(output) = output else { return false };
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for line in stdout.lines() {
+        let parts: Vec<&str> = line.split(':').collect();
+        if parts.len() >= 2 && parts[0] == device {
+            return parts[1] == "connected";
         }
-        Err(e) => Err(format!("PowerShell-fel: {}", e)),
     }
+    false
 }
 
-/// Try to enable the modern Windows Mobile Hotspot (Windows 10 1607+ / Windows 11).
-/// Uses the Windows.Networking.NetworkOperators.TetheringManager WinRT API via PowerShell.
-#[cfg(windows)]
-fn ensure_modern_mobile_hotspot(ssid: &str, pass: &str) -> Result<(), String> {
-    eprintln!("[Hotspot] Hosted network not supported. Trying modern Mobile Hotspot API...");
-
-    // PowerShell script using Windows Runtime TetheringManager API
-    let script = format!(r#"
-# Check for active WiFi adapter first
-$adapter = Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object {{ $_.InterfaceDescription -match 'Wi-Fi|Wireless' -and $_.Status -eq 'Up' }} | Select-Object -First 1
-if (-not $adapter) {{
-    # Also check for any wireless adapter even if not "Up" (might be disconnected)
-    $adapter = Get-NetAdapter -ErrorAction SilentlyContinue | Where-Object {{ $_.InterfaceDescription -match 'Wi-Fi|Wireless' }} | Select-Object -First 1
-    if (-not $adapter) {{
-        Write-Output "ERROR:NO_WIFI_ADAPTER"
-        exit 1
-    }}
-    # Adapter exists but might be disabled/disconnected — still worth trying
-}}
-
-# Method 1: Try Windows Runtime TetheringManager API (most reliable)
-try {{
-    # Load Windows Runtime
-    [Windows.System.Profile.SystemManufacturers.SmbiosInformation, Windows.System.Profile.SystemManufacturers, ContentType=WindowsRuntime] | Out-Null
-
-    # Get the TetheringManager for the WiFi adapter
-    $connectionProfile = [Windows.Networking.Connectivity.NetworkInformation, Windows.Networking.Connectivity, ContentType=WindowsRuntime]::GetInternetConnectionProfile()
-    $tetheringManager = [Windows.Networking.NetworkOperators.NetworkOperatorTetheringManager, Windows.Networking.NetworkOperators, ContentType=WindowsRuntime]::CreateFromConnectionProfile($connectionProfile)
-
-    # Check current state
-    $tetheringState = $tetheringManager.TetheringOperationalState
-    Write-Output ("INFO:TetheringState=" + $tetheringState)
-
-    if ($tetheringState -eq 'On') {{
-        Write-Output "SUCCESS:ALREADY_ON"
-        exit 0
-    }}
-
-    # Configure hotspot settings
-    $config = $tetheringManager.GetCurrentAccessPointConfiguration()
-    $config.Ssid = "{ssid}"
-    $config.Passphrase = "{pass}"
-
-    # Apply configuration
-    $configureResult = $tetheringManager.ConfigureAccessPointAsync($config)
-    # Wait for async operation
-    while ($configureResult.Status -eq 'Started') {{ Start-Sleep -Milliseconds 100 }}
-
-    if ($configureResult.Status -eq 'Error') {{
-        Write-Output ("ERROR:CONFIGURE_FAILED:" + $configureResult.ErrorCode)
-        exit 1
-    }}
-
-    # Start tethering
-    $startResult = $tetheringManager.StartTetheringAsync()
-    while ($startResult.Status -eq 'Started') {{ Start-Sleep -Milliseconds 100 }}
-
-    if ($startResult.Status -eq 'Completed') {{
-        $result = $startResult.GetResults()
-        if ($result.Status -eq 'Success' -or $result.Status -eq 'AlreadyOn') {{
-            Write-Output "SUCCESS:TETHERING_API"
-            exit 0
-        }} else {{
-            Write-Output ("ERROR:TETHERING_START_FAILED:" + $result.Status)
-            exit 1
-        }}
-    }} else {{
-        Write-Output ("ERROR:TETHERING_ASYNC_FAILED:" + $startResult.ErrorCode)
-        exit 1
-    }}
-}} catch {{
-    $err = $_.Exception.Message
-    Write-Output ("INFO:TetheringAPI_failed:" + $err)
-}}
-
-# Method 2: Try to enable via registry + service restart (requires admin)
-try {{
-    $regPath = 'HKLM:\SYSTEM\CurrentControlSet\Services\icssvc\Settings'
-
-    # Windows stores hotspot config as binary blobs. The format is complex,
-    # but we can try a simpler approach: just ensure the service is running
-    # and hope the user has already configured hotspot settings in Windows.
-
-    $svc = Get-Service icssvc -ErrorAction SilentlyContinue
-    if ($svc -and $svc.Status -ne 'Running') {{
-        Start-Service icssvc -ErrorAction Stop
-        Write-Output "SUCCESS:SERVICE_STARTED"
-        exit 0
-    }}
-}} catch {{
-    $err = $_.Exception.Message
-    if ($err -match 'denied' -or $err -match 'behörighet' -or $err -match 'Access is denied') {{
-        Write-Output "ERROR:ADMIN_REQUIRED"
-        exit 1
-    }}
-    Write-Output ("INFO:Service_method_failed:" + $err)
-}}
-
-# Method 3: Check if Mobile Hotspot is already configured and just needs to be toggled
-# Try using the Settings app's URI scheme to open hotspot settings
-Write-Output "INFO:MANUAL_REQUIRED"
-"#, ssid = ssid, pass = pass);
-
-    let temp_path = std::env::temp_dir().join("zalstudio_modern_hotspot.ps1");
-    let _ = std::fs::write(&temp_path, &script);
-    let output = std::process::Command::new("powershell.exe")
-        .args([
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-File",
-            temp_path.to_str().unwrap_or(""),
-        ])
+fn linux_stop_hotspot() -> Result<(), String> {
+    eprintln!("[Hotspot] Stopping Linux hotspot...");
+    let _ = std::process::Command::new("nmcli")
+        .args(["connection", "down", HOTSPOT_CONN_NAME])
         .output();
+    let _ = std::process::Command::new("nmcli")
+        .args(["connection", "delete", HOTSPOT_CONN_NAME])
+        .output();
+    Ok(())
+}
 
-    match output {
-        Ok(o) => {
-            let text = String::from_utf8_lossy(&o.stdout).trim().to_string();
-            let stderr = String::from_utf8_lossy(&o.stderr).trim().to_string();
-            eprintln!("[Modern Hotspot] stdout: {}", text);
-            if !stderr.is_empty() {
-                eprintln!("[Modern Hotspot] stderr: {}", stderr);
-            }
-
-            if text.contains("SUCCESS") {
-                // Give Windows a moment to bring up the hotspot
-                std::thread::sleep(std::time::Duration::from_secs(2));
-                if is_hotspot_active() {
-                    return Ok(());
-                }
-                std::thread::sleep(std::time::Duration::from_secs(3));
-                if is_hotspot_active() {
-                    return Ok(());
-                }
-                return Err(
-                    "Mobile Hotspot aktiverades men är inte redo än. \
-                     Vänta några sekunder och försök igen, eller aktivera det manuellt i Windows-inställningarna.".into()
-                );
-            }
-
-            if text.contains("ADMIN_REQUIRED") || text.contains("denied") || text.contains("Access is denied") {
-                return Err(
-                    "WiFi-hotspot kräver admin-rättigheter för att konfigurera Mobile Hotspot. \
-                     Starta appen som administratör, eller aktivera Mobile Hotspot manuellt i Windows-inställningarna.".into()
-                );
-            }
-
-            if text.contains("NO_WIFI_ADAPTER") {
-                return Err(
-                    "Ingen WiFi-adapter hittades. Kontrollera att WiFi är påslaget.".into()
-                );
-            }
-
-            // All automatic methods failed — guide user to manual setup
-            Err(
-                "Automatisk hotspot kunde inte startas. \
-                 Din WiFi-adaptern (Qualcomm Atheros) stöder inte äldre hosted network.\n\n\
-                 Lösningar:\n\
-                 1. Aktivera Mobile Hotspot manuellt: Inställningar → Nätverk → Mobile Hotspot\n\
-                 2. Använd USB-kabel istället för WiFi\n\
-                 3. Uppdatera WiFi-drivrutinen från tillverkaren".into()
-            )
+/// Get the name of the currently active 802.11 WiFi connection (if any).
+fn get_active_wifi_connection() -> Option<String> {
+    let output = std::process::Command::new("nmcli")
+        .args(["-t", "-f", "NAME,TYPE", "connection", "show", "--active"])
+        .output()
+        .ok()?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for line in stdout.lines() {
+        let parts: Vec<&str> = line.split(':').collect();
+        if parts.len() >= 2 && parts[1] == "802-11-wireless" {
+            return Some(parts[0].to_string());
         }
-        Err(e) => Err(format!("Kunde inte köra Mobile Hotspot-skript: {}", e)),
     }
+    None
 }

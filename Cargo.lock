@@ -4397,17 +4397,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "winmtp"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1d70511fe44097dbefe956b869af208bb936850c5272395b851f3cf1ec676dda"
-dependencies = [
- "thiserror 2.0.18",
- "widestring",
- "windows 0.52.0",
-]
-
-[[package]]
 name = "winnow"
 version = "0.7.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4631,6 +4620,7 @@ dependencies = [
  "eframe",
  "egui",
  "egui_extras",
+ "fastrand",
  "futures",
  "image",
  "kamadak-exif",
@@ -4643,8 +4633,6 @@ dependencies = [
  "ureq",
  "urlencoding",
  "walkdir",
- "widestring",
- "winmtp",
 ]
 
 [[package]]

@@ -22,7 +22,4 @@ sha2 = "0.10"
 urlencoding = "2.1"
 mtp-rs = "0.13"
 futures = "0.3"
-
-[target.'cfg(windows)'.dependencies]
-winmtp = "0.3"
-widestring = "1.0"
+fastrand = "2"

@@ -36,7 +36,17 @@ impl Printer {
         }
     }
 
-    pub fn queue_job(&mut self, photo_path: &Path, media_size: &str, copies: u32) -> usize {
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn queue_job(
+        &mut self,
+        photo_path: &Path,
+        media_size: &str,
+        copies: u32,
+        fit_to_page: bool,
+    ) -> usize {
         let mut counter = self.counter.lock().unwrap();
         *counter += 1;
         let id = *counter;
@@ -65,7 +75,13 @@ impl Printer {
                 }
             }
 
-            let result = Self::print_via_lp(&name, &job.photo_path, &job.media_size, job.copies);
+            let result = Self::print_via_lp(
+                &name,
+                &job.photo_path,
+                &job.media_size,
+                job.copies,
+                fit_to_page,
+            );
 
             {
                 let mut jobs = jobs.lock().unwrap();
@@ -97,6 +113,7 @@ impl Printer {
         image_path: &str,
         media_size: &str,
         copies: u32,
+        fit_to_page: bool,
     ) -> Result<(), String> {
         let mut cmd = Command::new("lp");
         cmd.arg("-d")
@@ -104,10 +121,11 @@ impl Printer {
             .arg("-o")
             .arg(format!("media={}", media_size))
             .arg("-n")
-            .arg(copies.to_string())
-            .arg("-o")
-            .arg("fit-to-page")
-            .arg(image_path);
+            .arg(copies.to_string());
+        if fit_to_page {
+            cmd.arg("-o").arg("fit-to-page");
+        }
+        cmd.arg(image_path);
 
         let output = cmd
             .output()
@@ -115,8 +133,7 @@ impl Printer {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            if stderr.to_lowercase().contains("error") || stderr.to_lowercase().contains("failed")
-            {
+            if stderr.to_lowercase().contains("error") || stderr.to_lowercase().contains("failed") {
                 return Err(format!("lp failed: {}", stderr));
             }
         }

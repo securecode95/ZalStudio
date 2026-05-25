@@ -4,12 +4,11 @@ mod gallery;
 mod google_drive;
 mod import;
 mod lang;
+mod mtp_backend;
 mod printer;
 mod server;
 mod ui;
-mod mtp_backend;
-#[cfg(windows)]
-mod powershell_mtp_backend;
+mod usb_detect;
 mod wired_import;
 
 use app::ZalStudio;
@@ -17,10 +16,8 @@ use app::ZalStudio;
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([640.0, 480.0])
-            .with_min_inner_size([640.0, 480.0])
-            .with_resizable(true)
-            .with_maximized(true)
+            .with_fullscreen(true)
+            .with_resizable(false)
             .with_decorations(false),
         ..Default::default()
     };

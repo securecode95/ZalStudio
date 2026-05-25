@@ -172,10 +172,7 @@ pub fn start_server(upload_dir: PathBuf, port: u16) -> Option<String> {
 
 fn handle_auth_callback(path: &str, stream: &mut TcpStream) {
     let query = path.split('?').nth(1).unwrap_or("");
-    let params: HashMap<&str, &str> = query
-        .split('&')
-        .filter_map(|p| p.split_once('='))
-        .collect();
+    let params: HashMap<&str, &str> = query.split('&').filter_map(|p| p.split_once('=')).collect();
 
     if let (Some(code), Some(state)) = (params.get("code"), params.get("state")) {
         if let Ok(mut store) = auth_store().lock() {
@@ -281,10 +278,9 @@ fn handle_client(mut stream: TcpStream, upload_dir: PathBuf) {
                 json.get("name").and_then(|v| v.as_str()),
                 json.get("data").and_then(|v| v.as_str()),
             ) {
-                if let Ok(bytes) = base64::Engine::decode(
-                    &base64::engine::general_purpose::STANDARD,
-                    data,
-                ) {
+                if let Ok(bytes) =
+                    base64::Engine::decode(&base64::engine::general_purpose::STANDARD, data)
+                {
                     let _ = std::fs::create_dir_all(&upload_dir);
                     let safe_name = sanitize_filename(name);
                     let dest = upload_dir.join(&safe_name);
@@ -307,16 +303,6 @@ fn handle_client(mut stream: TcpStream, upload_dir: PathBuf) {
 }
 
 fn local_ip() -> String {
-    // On Windows, the Mobile Hotspot interface typically uses 192.168.137.1.
-    // Check if this address is actually bound to a local interface before
-    // returning it, so we don't lie when hotspot is off.
-    #[cfg(windows)]
-    {
-        if is_ip_local("192.168.137.1") {
-            return "192.168.137.1".to_string();
-        }
-    }
-
     // Trick: connect a UDP socket to a non-routable address.
     // This forces the OS to pick an interface without sending any packets.
     // Works even without internet (offline hotspot mode).

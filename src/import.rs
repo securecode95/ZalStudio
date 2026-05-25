@@ -4,18 +4,12 @@ use walkdir::WalkDir;
 
 const IMAGE_EXTS: &[&str] = &["jpg", "jpeg", "png", "gif", "bmp", "webp", "tiff", "tif"];
 
-/// Hitta alla monterade lagringsenheter på Linux
-#[cfg(target_os = "linux")]
+/// Hitta alla monterade lagringsenheter
 pub fn find_mounted_devices() -> Vec<PathBuf> {
     let mut devices = Vec::new();
 
     // Vanliga monteringspunkter för USB-minnen / kortläsare
-    let candidates = [
-        "/run/media",
-        "/media",
-        "/mnt",
-        "/run/user",
-    ];
+    let candidates = ["/run/media", "/media", "/mnt", "/run/user"];
 
     for base in &candidates {
         let base_path = Path::new(base);
@@ -45,16 +39,10 @@ pub fn find_mounted_devices() -> Vec<PathBuf> {
     devices
 }
 
-#[cfg(not(target_os = "linux"))]
-pub fn find_mounted_devices() -> Vec<PathBuf> {
-    Vec::new()
-}
-
 /// Importera bilder från USB / kameraminne / kortläsare
 /// Försöker först hitta DCIM-mappar (kamerastruktur), annars alla bilder
 pub fn import_from_storage(source_dir: &Path, dest_dir: &Path) -> Result<usize, String> {
-    // Om source_dir inte finns, försök hitta monterade enheter på Linux
-    #[cfg(target_os = "linux")]
+    // Om source_dir inte finns, försök hitta monterade enheter
     if !source_dir.exists() || source_dir == Path::new("/media") {
         let devices = find_mounted_devices();
         if devices.is_empty() {
@@ -93,8 +81,7 @@ fn import_from_storage_single(source_dir: &Path, dest_dir: &Path) -> Result<usiz
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| {
-            e.file_type().is_dir()
-                && e.file_name().to_string_lossy().to_uppercase() == "DCIM"
+            e.file_type().is_dir() && e.file_name().to_string_lossy().to_uppercase() == "DCIM"
         })
         .map(|e| e.path().to_path_buf())
         .collect();
@@ -127,12 +114,18 @@ fn copy_images(source: &Path, dest: &Path, overwrite: bool) -> Result<usize, Str
                 if IMAGE_EXTS.contains(&ext.as_str()) {
                     let file_name = path.file_name().unwrap_or_default();
                     let dest_path = dest.join(file_name);
+                    let src_size = entry.metadata().map(|m| m.len()).unwrap_or(0);
 
                     if !dest_path.exists() || overwrite {
                         if fs::copy(path, dest_path).is_ok() {
                             copied += 1;
                         }
                     } else {
+                        // Skip if already exists with same size
+                        let dest_size = fs::metadata(&dest_path).map(|m| m.len()).unwrap_or(0);
+                        if src_size == dest_size {
+                            continue;
+                        }
                         // Byt namn om konflikt
                         let stem = path.file_stem().unwrap_or_default().to_string_lossy();
                         let new_name = format!("{}_{}.{}", stem, copied, ext);

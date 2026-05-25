@@ -15,7 +15,9 @@ pub fn discover_photos(dir: &Path) -> Vec<Photo> {
     }
 
     let mut photos = Vec::new();
-    let exts = ["jpg", "jpeg", "png", "gif", "bmp", "webp", "tiff", "tif", "heic", "heif"];
+    let exts = [
+        "jpg", "jpeg", "png", "gif", "bmp", "webp", "tiff", "tif", "heic", "heif",
+    ];
 
     for entry in WalkDir::new(dir)
         .max_depth(2)
@@ -33,11 +35,11 @@ pub fn discover_photos(dir: &Path) -> Vec<Photo> {
                         .to_string_lossy()
                         .to_string();
                     let file_size = entry.metadata().map(|m| m.len()).unwrap_or(0);
-                    let dimensions = image::image_dimensions(path).ok();
+                    // Dimensions read lazily to avoid main-thread freeze with many files
                     photos.push(Photo {
                         path: path.to_path_buf(),
                         file_name,
-                        dimensions,
+                        dimensions: None,
                         file_size,
                     });
                 }

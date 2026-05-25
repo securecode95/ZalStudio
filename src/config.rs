@@ -25,6 +25,8 @@ pub struct Config {
     pub wifi_password: String,
     /// Server port for mobile upload
     pub server_port: u16,
+    /// Price per print format (currency units, e.g. SEK)
+    pub price_per_format: HashMap<String, f64>,
 }
 
 impl Default for Config {
@@ -47,6 +49,12 @@ impl Default for Config {
             wifi_ssid: String::from("ZalStudio"),
             wifi_password: String::from(""),
             server_port: 8080,
+            price_per_format: {
+                let mut m = HashMap::new();
+                m.insert("10x15".to_string(), 15.0);
+                m.insert("15x23".to_string(), 25.0);
+                m
+            },
         }
     }
 }
@@ -73,8 +81,14 @@ impl Config {
                     Ok(contents) => match toml::from_str::<Config>(&contents) {
                         Ok(config) => {
                             eprintln!("[ZalStudio] Loaded config from: {}", candidate.display());
-                            eprintln!("[ZalStudio] google_client_id len = {}", config.google_client_id.len());
-                            eprintln!("[ZalStudio] google_client_secret len = {}", config.google_client_secret.len());
+                            eprintln!(
+                                "[ZalStudio] google_client_id len = {}",
+                                config.google_client_id.len()
+                            );
+                            eprintln!(
+                                "[ZalStudio] google_client_secret len = {}",
+                                config.google_client_secret.len()
+                            );
                             return config;
                         }
                         Err(e) => {
@@ -97,17 +111,21 @@ impl Config {
             .join("config.toml");
         let config = Config::default();
         let _ = std::fs::create_dir_all(os_config_path.parent().unwrap());
-        let _ = std::fs::write(&os_config_path, toml::to_string_pretty(&config).unwrap_or_default());
-        eprintln!("[ZalStudio] No config found. Created default at: {}", os_config_path.display());
+        let _ = std::fs::write(
+            &os_config_path,
+            toml::to_string_pretty(&config).unwrap_or_default(),
+        );
+        eprintln!(
+            "[ZalStudio] No config found. Created default at: {}",
+            os_config_path.display()
+        );
         config
     }
 
     pub fn effective_usb_path(&self) -> PathBuf {
-        if cfg!(target_os = "linux") {
-            let run_media = PathBuf::from("/run/media");
-            if run_media.exists() {
-                return run_media;
-            }
+        let run_media = PathBuf::from("/run/media");
+        if run_media.exists() {
+            return run_media;
         }
         self.usb_import_path.clone()
     }
@@ -117,11 +135,13 @@ impl Config {
     }
 
     pub fn all_printers(&self) -> Vec<&str> {
-        let mut printers: Vec<&str> = self.printer_for_size.values()
-            .map(|s| s.as_str())
-            .collect();
+        let mut printers: Vec<&str> = self.printer_for_size.values().map(|s| s.as_str()).collect();
         printers.sort();
         printers.dedup();
         printers
+    }
+
+    pub fn price_for_size(&self, size: &str) -> f64 {
+        self.price_per_format.get(size).copied().unwrap_or(0.0)
     }
 }
