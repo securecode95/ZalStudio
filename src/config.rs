@@ -27,13 +27,15 @@ pub struct Config {
     pub server_port: u16,
     /// Price per print format (currency units, e.g. SEK)
     pub price_per_format: HashMap<String, f64>,
+    #[serde(skip)]
+    pub source_path: Option<PathBuf>,
 }
 
 impl Default for Config {
     fn default() -> Self {
         let mut printer_for_size = HashMap::new();
-        printer_for_size.insert("10x15".to_string(), "CP-9550DW-S".to_string());
-        printer_for_size.insert("15x23".to_string(), "CP-9810DW-S".to_string());
+        printer_for_size.insert("10x15".to_string(), "Printer1".to_string());
+        printer_for_size.insert("15x23".to_string(), "Printer2".to_string());
 
         Self {
             photo_directory: PathBuf::from("./photos"),
@@ -55,6 +57,7 @@ impl Default for Config {
                 m.insert("15x23".to_string(), 25.0);
                 m
             },
+            source_path: None,
         }
     }
 }
@@ -79,7 +82,7 @@ impl Config {
                 eprintln!("[ZalStudio] Found config file!");
                 match std::fs::read_to_string(candidate) {
                     Ok(contents) => match toml::from_str::<Config>(&contents) {
-                        Ok(config) => {
+                        Ok(mut config) => {
                             eprintln!("[ZalStudio] Loaded config from: {}", candidate.display());
                             eprintln!(
                                 "[ZalStudio] google_client_id len = {}",
@@ -89,6 +92,7 @@ impl Config {
                                 "[ZalStudio] google_client_secret len = {}",
                                 config.google_client_secret.len()
                             );
+                            config.source_path = Some(candidate.clone());
                             return config;
                         }
                         Err(e) => {
@@ -109,7 +113,7 @@ impl Config {
             .unwrap_or_else(|| PathBuf::from("."))
             .join("zalstudio")
             .join("config.toml");
-        let config = Config::default();
+        let mut config = Config::default();
         let _ = std::fs::create_dir_all(os_config_path.parent().unwrap());
         let _ = std::fs::write(
             &os_config_path,
@@ -119,7 +123,21 @@ impl Config {
             "[ZalStudio] No config found. Created default at: {}",
             os_config_path.display()
         );
+        config.source_path = Some(os_config_path);
         config
+    }
+
+    pub fn save(&self) -> Result<(), String> {
+        let path = self
+            .source_path
+            .as_ref()
+            .cloned()
+            .or_else(|| Some(PathBuf::from("config.toml")))
+            .ok_or("No config path")?;
+        let contents =
+            toml::to_string_pretty(self).map_err(|e| format!("Serialize error: {}", e))?;
+        std::fs::write(&path, contents).map_err(|e| format!("Write error: {}", e))?;
+        Ok(())
     }
 
     pub fn effective_usb_path(&self) -> PathBuf {

@@ -179,8 +179,7 @@ pub fn import_phone_photos(
     photos: &[&PhonePhoto],
     dest_dir: &Path,
 ) -> Result<(usize, usize), String> {
-    std::fs::create_dir_all(dest_dir)
-        .map_err(|e| format!("Kunde inte skapa temp-mapp: {}", e))?;
+    std::fs::create_dir_all(dest_dir).map_err(|e| format!("Kunde inte skapa temp-mapp: {}", e))?;
 
     let mut count = 0;
     let mut converted = 0;
@@ -197,11 +196,7 @@ pub fn import_phone_photos(
 
         let dest = if is_heif {
             // Convert to JPEG
-            let file_stem = photo
-                .path
-                .file_stem()
-                .unwrap_or_default()
-                .to_string_lossy();
+            let file_stem = photo.path.file_stem().unwrap_or_default().to_string_lossy();
             let jpeg_name = format!("{}_{}.jpg", file_stem, count);
             let jpeg_path = dest_dir.join(&jpeg_name);
 
@@ -222,11 +217,7 @@ pub fn import_phone_photos(
 
         // Handle name collisions
         let dest = if dest.exists() && !is_heif {
-            let stem = photo
-                .path
-                .file_stem()
-                .unwrap_or_default()
-                .to_string_lossy();
+            let stem = photo.path.file_stem().unwrap_or_default().to_string_lossy();
             let ext = photo.path.extension().unwrap_or_default().to_string_lossy();
             dest_dir.join(format!("{}_{}.{}", stem, count, ext))
         } else {

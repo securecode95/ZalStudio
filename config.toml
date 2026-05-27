@@ -1,10 +1,12 @@
 photo_directory = "./photos"
-paper_sizes = ["10x15", "15x23"]
+paper_sizes = [
+    "10x15",
+    "15x23",
+]
 default_paper_size = 0
 copies_default = 1
 fit_to_page = true
 usb_import_path = "/media"
-camera_import_path = "/media"
 google_client_id = ""
 google_client_secret = ""
 temp_directory = "./temp_imports"
@@ -13,5 +15,9 @@ wifi_password = ""
 server_port = 8080
 
 [printer_for_size]
-"10x15" = "CP-9550DW-S"
-"15x23" = "CP-9810DW-S"
+10x15 = "Printer1"
+15x23 = "Printer2"
+
+[price_per_format]
+15x23 = 12.0
+10x15 = 8.0

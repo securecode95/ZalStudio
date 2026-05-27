@@ -111,7 +111,10 @@ pub fn exchange_code_for_token(
             format!("HTTP error: {}", e)
         })?;
 
-    let body = resp.into_body().read_to_string().map_err(|e| e.to_string())?;
+    let body = resp
+        .into_body()
+        .read_to_string()
+        .map_err(|e| e.to_string())?;
 
     if let Ok(err) = serde_json::from_str::<TokenErrorResponse>(&body) {
         return Err(format!("OAuth error: {}", err.error));
@@ -120,7 +123,11 @@ pub fn exchange_code_for_token(
     let token: TokenResponse =
         serde_json::from_str(&body).map_err(|e| format!("JSON error: {}", e))?;
 
-    eprintln!("[GoogleAuth] Got access_token (len={}): {}", token.access_token.len(), &token.access_token);
+    eprintln!(
+        "[GoogleAuth] Got access_token (len={}): {}",
+        token.access_token.len(),
+        &token.access_token
+    );
     Ok(token)
 }
 
@@ -155,20 +162,26 @@ pub fn list_drive_images(access_token: &str) -> Result<Vec<DriveFile>, String> {
         .call()
         .map_err(|e| format!("HTTP error: {}", e))?;
 
-    let body = resp.into_body().read_to_string().map_err(|e| e.to_string())?;
-    eprintln!("[GoogleDrive] list_drive_images response: {}", &body[..body.len().min(300)]);
+    let body = resp
+        .into_body()
+        .read_to_string()
+        .map_err(|e| e.to_string())?;
+    eprintln!(
+        "[GoogleDrive] list_drive_images response: {}",
+        &body[..body.len().min(300)]
+    );
     let list: DriveFileList =
         serde_json::from_str(&body).map_err(|e| format!("JSON error: {}", e))?;
 
     Ok(list.files)
 }
 
-pub fn download_drive_file(
-    file_id: &str,
-    access_token: &str,
-    dest: &Path,
-) -> Result<(), String> {
-    eprintln!("[GoogleDrive] Downloading file {} to {}", file_id, dest.display());
+pub fn download_drive_file(file_id: &str, access_token: &str, dest: &Path) -> Result<(), String> {
+    eprintln!(
+        "[GoogleDrive] Downloading file {} to {}",
+        file_id,
+        dest.display()
+    );
     let resp = ureq::get(&format!(
         "https://www.googleapis.com/drive/v3/files/{}?alt=media",
         file_id
@@ -183,7 +196,11 @@ pub fn download_drive_file(
     let mut body = resp.into_body();
     let mut reader = body.as_reader();
     let mut file = std::fs::File::create(dest).map_err(|e| {
-        eprintln!("[GoogleDrive] File create failed for {}: {}", dest.display(), e);
+        eprintln!(
+            "[GoogleDrive] File create failed for {}: {}",
+            dest.display(),
+            e
+        );
         e.to_string()
     })?;
     std::io::copy(&mut reader, &mut file).map_err(|e| {
@@ -235,8 +252,14 @@ pub fn list_google_photos(access_token: &str) -> Result<Vec<GooglePhoto>, String
         .call()
         .map_err(|e| format!("HTTP error: {}", e))?;
 
-    let body = resp.into_body().read_to_string().map_err(|e| e.to_string())?;
-    eprintln!("[GooglePhotos] list_google_photos response: {}", &body[..body.len().min(300)]);
+    let body = resp
+        .into_body()
+        .read_to_string()
+        .map_err(|e| e.to_string())?;
+    eprintln!(
+        "[GooglePhotos] list_google_photos response: {}",
+        &body[..body.len().min(300)]
+    );
     let result: GooglePhotosList =
         serde_json::from_str(&body).map_err(|e| format!("JSON error: {}", e))?;
 

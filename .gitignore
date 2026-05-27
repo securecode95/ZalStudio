@@ -1,2 +1,7 @@
 /target
 nul
+photos/
+temp_imports/
+Exempelbilder/
+print_history/
+*.tmp

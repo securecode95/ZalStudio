@@ -132,10 +132,14 @@ impl Printer {
             .map_err(|e| format!("Failed to execute lp: {}", e))?;
 
         if !output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr = String::from_utf8_lossy(&output.stderr);
-            if stderr.to_lowercase().contains("error") || stderr.to_lowercase().contains("failed") {
-                return Err(format!("lp failed: {}", stderr));
-            }
+            return Err(format!(
+                "lp failed (exit {}): stdout='{}' stderr='{}'",
+                output.status.code().unwrap_or(-1),
+                stdout.trim(),
+                stderr.trim()
+            ));
         }
 
         Ok(())

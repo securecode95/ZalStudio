@@ -18,15 +18,15 @@ pub fn apply_style(ctx: &egui::Context) {
     let s = touch_scale(ctx);
     let mut style = egui::Style::default();
     style.visuals = egui::Visuals::dark();
-    style.visuals.panel_fill = Color32::from_rgb(22, 22, 28);
-    style.visuals.window_fill = Color32::from_rgb(28, 28, 36);
-    style.visuals.extreme_bg_color = Color32::from_rgb(16, 16, 22);
-    style.visuals.widgets.inactive.weak_bg_fill = Color32::from_rgb(40, 40, 55);
-    style.visuals.widgets.inactive.bg_fill = Color32::from_rgb(50, 50, 70);
-    style.visuals.widgets.hovered.bg_fill = Color32::from_rgb(70, 70, 95);
-    style.visuals.widgets.active.bg_fill = Color32::from_rgb(90, 90, 120);
-    style.visuals.selection.bg_fill = Color32::from_rgb(0, 150, 200);
-    style.visuals.widgets.noninteractive.bg_fill = Color32::from_rgb(30, 30, 42);
+    style.visuals.panel_fill = Color32::from_rgb(10, 15, 26);
+    style.visuals.window_fill = Color32::from_rgb(10, 15, 26);
+    style.visuals.extreme_bg_color = Color32::from_rgb(10, 15, 26);
+    style.visuals.widgets.inactive.weak_bg_fill = Color32::from_rgb(17, 24, 39);
+    style.visuals.widgets.inactive.bg_fill = Color32::from_rgb(17, 24, 39);
+    style.visuals.widgets.hovered.bg_fill = Color32::from_rgb(30, 40, 60);
+    style.visuals.widgets.active.bg_fill = Color32::from_rgb(40, 50, 70);
+    style.visuals.selection.bg_fill = Color32::from_rgb(0, 229, 255);
+    style.visuals.widgets.noninteractive.bg_fill = Color32::from_rgb(13, 19, 33);
     style.spacing.item_spacing = Vec2::new(8.0 * s, 8.0 * s);
     style.spacing.button_padding = Vec2::new(16.0 * s, 12.0 * s);
     ctx.set_style(style);
@@ -52,7 +52,13 @@ pub fn draw(ctx: &egui::Context, app: &mut ZalStudio) {
         AppScreen::GoogleDrivePicker => draw_google_drive_picker(ctx, app),
         AppScreen::GooglePhotosPicker => draw_google_photos_picker(ctx, app),
         AppScreen::PrintDone => draw_print_done(ctx, app),
+        AppScreen::PrintProgress => draw_print_progress(ctx, app),
+        AppScreen::ThankYou => draw_thank_you(ctx, app),
         AppScreen::Payment => draw_payment(ctx, app),
+        AppScreen::LayoutSelect => draw_layout_select(ctx, app),
+        AppScreen::CollageEditor => draw_collage_editor(ctx, app),
+        AppScreen::SettingsAuth => draw_settings_auth(ctx, app),
+        AppScreen::Settings => draw_settings(ctx, app),
     }
 
     draw_toast(ctx, app);
@@ -65,93 +71,196 @@ fn draw_product_select(ctx: &egui::Context, app: &mut ZalStudio) {
     let pack = l(app.lang);
     let s = touch_scale(ctx);
 
-    egui::CentralPanel::default()
-        .frame(
-            Frame::none()
-                .fill(Color32::from_rgb(14, 14, 22))
-                .inner_margin(24.0 * s),
-        )
-        .show(ctx, |ui| {
-            ui.vertical_centered(|ui| {
-                ui.add_space(40.0 * s);
+    let bg_main = Color32::from_rgb(10, 15, 26);
+    let bg_card = Color32::from_rgb(17, 24, 39);
+    let text_dark = Color32::from_rgb(224, 247, 255);
+    let text_mid = Color32::from_rgb(142, 202, 230);
+    let blue_accent = Color32::from_rgb(0, 229, 255);
 
+    egui::CentralPanel::default()
+        .frame(Frame::none().inner_margin(24.0 * s))
+        .show(ctx, |ui| {
+            let rect = ui.max_rect();
+            ui.painter().rect_filled(rect, 0.0, bg_main);
+
+            // Top bar with title and settings button
+            ui.horizontal(|ui| {
                 ui.label(
-                    egui::RichText::new("📷  Zalstudio Kiosk")
-                        .size(32.0 * s)
+                    egui::RichText::new("Zalstudio")
+                        .size(22.0 * s)
                         .strong()
-                        .color(Color32::WHITE),
+                        .color(blue_accent),
                 );
-                ui.add_space(8.0 * s);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    // Settings button
+                    let settings_btn = egui::Button::new(
+                        egui::RichText::new("⚙")
+                            .size(18.0 * s)
+                            .color(Color32::WHITE),
+                    )
+                    .fill(Color32::from_rgb(40, 50, 70))
+                    .rounding(Rounding::same(8.0 * s))
+                    .min_size(Vec2::new(72.0 * s, 64.0 * s));
+                    if ui.add(settings_btn).clicked() {
+                        app.screen = AppScreen::SettingsAuth;
+                        app.settings_pin_input.clear();
+                        app.settings_auth_failed = false;
+                    }
+                    ui.add_space(8.0 * s);
+
+                    // Language toggle
+                    let lang_btn = egui::Button::new(
+                        egui::RichText::new(app.lang.name())
+                            .size(13.0 * s)
+                            .color(Color32::WHITE),
+                    )
+                    .fill(Color32::from_rgb(50, 60, 80))
+                    .rounding(Rounding::same(6.0 * s))
+                    .min_size(Vec2::new(88.0 * s, 72.0 * s));
+                    if ui.add(lang_btn).clicked() {
+                        app.lang = app.lang.toggle();
+                    }
+                });
+            });
+
+            ui.vertical_centered(|ui| {
+                ui.add_space(16.0 * s);
+                ui.label(
+                    egui::RichText::new("VÄLJ TJÄNST")
+                        .size(28.0 * s)
+                        .strong()
+                        .color(text_dark),
+                );
+                ui.add_space(4.0 * s);
                 ui.label(
                     egui::RichText::new(pack.product_select_title)
-                        .size(20.0 * s)
-                        .color(Color32::from_gray(140)),
+                        .size(16.0 * s)
+                        .color(text_mid),
                 );
-
-                ui.add_space(50.0 * s);
-
-                let btn_width = ui.available_width().min(400.0 * s);
-
-                // FOTO
-                let foto_btn = egui::Button::new(
-                    egui::RichText::new(format!(
-                        "🖼  {}\n{}",
-                        pack.product_foto, pack.product_foto_desc
-                    ))
-                    .size(16.0 * s)
-                    .strong()
-                    .color(Color32::WHITE),
-                )
-                .fill(Color32::from_rgb(0, 120, 90))
-                .rounding(Rounding::same(12.0 * s))
-                .min_size(Vec2::new(btn_width, 90.0 * s));
-                if ui.add(foto_btn).clicked() {
-                    app.selected_product = "foto".to_string();
-                    app.screen = AppScreen::SourceSelect;
-                }
-                ui.add_space(14.0 * s);
-
-                // ALBUM 15x23
-                let album_btn = egui::Button::new(
-                    egui::RichText::new(format!(
-                        "📔  {}\n{}",
-                        pack.product_album, pack.product_album_desc
-                    ))
-                    .size(16.0 * s)
-                    .strong()
-                    .color(Color32::WHITE),
-                )
-                .fill(Color32::from_rgb(45, 85, 140))
-                .rounding(Rounding::same(12.0 * s))
-                .min_size(Vec2::new(btn_width, 90.0 * s));
-                if ui.add(album_btn).clicked() {
-                    app.selected_product = "album".to_string();
-                    // Lock paper size to 15x23 for album product
-                    if let Some(idx) = app.config.paper_sizes.iter().position(|s| s == "15x23") {
-                        app.paper_size_idx = idx;
-                    }
-                    app.screen = AppScreen::SourceSelect;
-                }
-                ui.add_space(14.0 * s);
-
-                // COLLAGE
-                let collage_btn = egui::Button::new(
-                    egui::RichText::new(format!(
-                        "🎨  {}\n{}",
-                        pack.product_collage, pack.product_collage_desc
-                    ))
-                    .size(16.0 * s)
-                    .strong()
-                    .color(Color32::WHITE),
-                )
-                .fill(Color32::from_rgb(140, 55, 115))
-                .rounding(Rounding::same(12.0 * s))
-                .min_size(Vec2::new(btn_width, 90.0 * s));
-                if ui.add(collage_btn).clicked() {
-                    app.selected_product = "collage".to_string();
-                    app.screen = AppScreen::SourceSelect;
-                }
+                ui.add_space(20.0 * s);
             });
+
+            // Build product grid (2 columns)
+            let mut products: Vec<(String, String, String, String, f64, &'static str, Color32)> =
+                Vec::new();
+            for size in &app.config.paper_sizes {
+                let price = app.config.price_for_size(size);
+                products.push((
+                    "foto".to_string(),
+                    size.clone(),
+                    format!("{} {}", pack.product_foto, size),
+                    pack.product_foto_desc.to_string(),
+                    price,
+                    "🖼",
+                    Color32::from_rgb(0, 229, 255),
+                ));
+                products.push((
+                    "album".to_string(),
+                    size.clone(),
+                    format!("{} {}", pack.product_album, size),
+                    pack.product_album_desc.to_string(),
+                    price,
+                    "📔",
+                    Color32::from_rgb(0, 229, 255),
+                ));
+                products.push((
+                    "collage".to_string(),
+                    size.clone(),
+                    format!("{} {}", pack.product_collage, size),
+                    pack.product_collage_desc.to_string(),
+                    price,
+                    "🎨",
+                    Color32::from_rgb(180, 80, 200),
+                ));
+            }
+
+            let cols = 2;
+            let gap = 12.0 * s;
+            let avail = ui.available_width();
+            let cell_w = (avail - gap * (cols as f32 - 1.0)) / cols as f32;
+
+            for chunk in products.chunks(cols) {
+                ui.horizontal(|ui| {
+                    ui.set_width(avail);
+                    for (product_type, size, title, _desc, price, icon, accent) in chunk {
+                        let cell = ui.allocate_ui_with_layout(
+                            Vec2::new(cell_w, 140.0 * s),
+                            egui::Layout::top_down(egui::Align::Center),
+                            |ui| {
+                                let btn_rect = ui.max_rect();
+                                let resp = ui.interact(
+                                    btn_rect,
+                                    ui.id().with(title),
+                                    egui::Sense::click(),
+                                );
+
+                                let bg = if resp.hovered() {
+                                    Color32::from_rgb(10, 15, 26)
+                                } else {
+                                    bg_card
+                                };
+                                ui.painter().rect_filled(btn_rect, 12.0 * s, bg);
+                                ui.painter().rect_stroke(
+                                    btn_rect,
+                                    12.0 * s,
+                                    Stroke::new(
+                                        2.0 * s,
+                                        if resp.hovered() {
+                                            blue_accent
+                                        } else {
+                                            Color32::from_rgb(30, 40, 60)
+                                        },
+                                    ),
+                                );
+
+                                // Inner content
+                                let inner = btn_rect.shrink(12.0 * s);
+                                ui.allocate_ui_at_rect(inner, |ui| {
+                                    ui.vertical_centered(|ui| {
+                                        ui.add_space(8.0 * s);
+                                        ui.label(
+                                            egui::RichText::new(*icon)
+                                                .size(36.0 * s)
+                                                .color(*accent),
+                                        );
+                                        ui.add_space(6.0 * s);
+                                        ui.label(
+                                            egui::RichText::new(title)
+                                                .size(15.0 * s)
+                                                .strong()
+                                                .color(text_dark),
+                                        );
+                                        ui.add_space(4.0 * s);
+                                        ui.label(
+                                            egui::RichText::new(format!("{:.0} kr", price))
+                                                .size(14.0 * s)
+                                                .strong()
+                                                .color(blue_accent),
+                                        );
+                                    });
+                                });
+
+                                resp
+                            },
+                        );
+
+                        if cell.inner.clicked() {
+                            app.selected_product = product_type.clone();
+                            app.selected_product_size = size.clone();
+                            if let Some(idx) = app.config.paper_sizes.iter().position(|s| s == size)
+                            {
+                                app.paper_size_idx = idx;
+                            }
+                            app.screen = AppScreen::SourceSelect;
+                        }
+
+                        if chunk.len() > 1 && ui.available_width() > gap {
+                            ui.add_space(gap);
+                        }
+                    }
+                });
+                ui.add_space(gap);
+            }
         });
 }
 
@@ -162,39 +271,20 @@ fn draw_welcome(ctx: &egui::Context, app: &mut ZalStudio) {
     let pack = l(app.lang);
     let s = touch_scale(ctx);
 
+    let bg_main = Color32::from_rgb(10, 15, 26);
+    let text_dark = Color32::from_rgb(224, 247, 255);
+    let text_mid = Color32::from_rgb(142, 202, 230);
+    let blue_accent = Color32::from_rgb(0, 229, 255);
+
     egui::CentralPanel::default()
-        .frame(
-            Frame::none()
-                .fill(Color32::from_rgb(18, 18, 26))
-                .inner_margin(24.0 * s),
-        )
+        .frame(Frame::none().fill(bg_main).inner_margin(24.0 * s))
         .show(ctx, |ui| {
             let rect = ui.max_rect();
-
-            // ── Subtle vertical gradient background ─────────────────────────
-            {
-                let p = ui.painter();
-                let top_color = Color32::from_rgb(14, 14, 22);
-                let bottom_color = Color32::from_rgb(28, 30, 44);
-                let bands = 80;
-                let h = rect.height();
-                let band_h = h / bands as f32;
-                for i in 0..bands {
-                    let t = i as f32 / (bands - 1) as f32;
-                    let r = (top_color.r() as f32 * (1.0 - t) + bottom_color.r() as f32 * t) as u8;
-                    let g = (top_color.g() as f32 * (1.0 - t) + bottom_color.g() as f32 * t) as u8;
-                    let b = (top_color.b() as f32 * (1.0 - t) + bottom_color.b() as f32 * t) as u8;
-                    let band_rect = egui::Rect::from_min_max(
-                        egui::pos2(rect.left(), rect.top() + band_h * i as f32),
-                        egui::pos2(rect.right(), rect.top() + band_h * (i + 1) as f32),
-                    );
-                    p.rect_filled(band_rect, 0.0, Color32::from_rgb(r, g, b));
-                }
-            }
+            ui.painter().rect_filled(rect, 0.0, bg_main);
 
             // Top bar: back to product, product label + language toggle
             ui.horizontal(|ui| {
-                if nav_button(ui, "<", s).clicked() {
+                if nav_button(ui, "◀", s).clicked() {
                     app.screen = AppScreen::ProductSelect;
                 }
                 ui.add_space(8.0 * s);
@@ -208,18 +298,18 @@ fn draw_welcome(ctx: &egui::Context, app: &mut ZalStudio) {
                         egui::RichText::new(format!("🛍 {}", product_label))
                             .size(13.0 * s)
                             .strong()
-                            .color(Color32::from_rgb(80, 220, 120)),
+                            .color(Color32::from_rgb(0, 229, 255)),
                     );
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
                     let lang_btn = egui::Button::new(
                         egui::RichText::new(app.lang.name())
                             .size(13.0 * s)
-                            .color(Color32::from_gray(180)),
+                            .color(Color32::WHITE),
                     )
-                    .fill(Color32::from_rgb(35, 35, 48))
+                    .fill(Color32::from_rgb(50, 60, 80))
                     .rounding(Rounding::same(6.0 * s))
-                    .min_size(Vec2::new(48.0 * s, 32.0 * s));
+                    .min_size(Vec2::new(88.0 * s, 72.0 * s));
                     if ui.add(lang_btn).clicked() {
                         app.lang = app.lang.toggle();
                     }
@@ -231,10 +321,10 @@ fn draw_welcome(ctx: &egui::Context, app: &mut ZalStudio) {
 
                 // Title
                 ui.label(
-                    egui::RichText::new("📷  Zalstudio Kiosk")
+                    egui::RichText::new("Zalstudio Kiosk")
                         .size(38.0 * s)
                         .strong()
-                        .color(Color32::WHITE),
+                        .color(text_dark),
                 );
                 ui.add_space(10.0 * s);
 
@@ -242,7 +332,7 @@ fn draw_welcome(ctx: &egui::Context, app: &mut ZalStudio) {
                 ui.label(
                     egui::RichText::new(pack.source_select_subtitle)
                         .size(17.0 * s)
-                        .color(Color32::from_gray(140)),
+                        .color(text_mid),
                 );
 
                 ui.add_space(60.0 * s);
@@ -256,9 +346,9 @@ fn draw_welcome(ctx: &egui::Context, app: &mut ZalStudio) {
                         .strong()
                         .color(Color32::WHITE),
                 )
-                .fill(Color32::from_rgb(45, 85, 140))
+                .fill(blue_accent)
                 .rounding(Rounding::same(10.0 * s))
-                .min_size(Vec2::new(btn_width, 68.0 * s));
+                .min_size(Vec2::new(btn_width, 88.0 * s));
                 if ui.add(usb_btn).clicked() {
                     app.import_usb();
                 }
@@ -271,9 +361,9 @@ fn draw_welcome(ctx: &egui::Context, app: &mut ZalStudio) {
                         .strong()
                         .color(Color32::WHITE),
                 )
-                .fill(Color32::from_rgb(140, 55, 115))
+                .fill(Color32::from_rgb(160, 60, 180))
                 .rounding(Rounding::same(10.0 * s))
-                .min_size(Vec2::new(btn_width, 68.0 * s));
+                .min_size(Vec2::new(btn_width, 88.0 * s));
                 if ui.add(mobile_btn).clicked() {
                     app.open_mobile_upload();
                 }
@@ -291,7 +381,7 @@ fn draw_usb_plug_wait(ctx: &egui::Context, app: &mut ZalStudio) {
     egui::CentralPanel::default()
         .frame(
             Frame::none()
-                .fill(Color32::from_rgb(14, 14, 22))
+                .fill(Color32::from_rgb(10, 15, 26))
                 .inner_margin(24.0 * s),
         )
         .show(ctx, |ui| {
@@ -308,7 +398,7 @@ fn draw_usb_plug_wait(ctx: &egui::Context, app: &mut ZalStudio) {
                 ui.label(
                     egui::RichText::new("💾")
                         .size(64.0 * s)
-                        .color(Color32::from_rgb(0, 200, 255)),
+                        .color(Color32::from_rgb(0, 229, 255)),
                 );
                 ui.add_space(16.0 * s);
 
@@ -323,13 +413,13 @@ fn draw_usb_plug_wait(ctx: &egui::Context, app: &mut ZalStudio) {
                 ui.label(
                     egui::RichText::new(pack.usb_plug_subtitle)
                         .size(16.0 * s)
-                        .color(Color32::from_gray(160)),
+                        .color(Color32::from_rgb(142, 202, 230)),
                 );
                 ui.add_space(8.0 * s);
                 ui.label(
                     egui::RichText::new(pack.usb_plug_hint)
                         .size(13.0 * s)
-                        .color(Color32::from_gray(120)),
+                        .color(Color32::from_rgb(180, 200, 220)),
                 );
 
                 ui.add_space(40.0 * s);
@@ -340,7 +430,7 @@ fn draw_usb_plug_wait(ctx: &egui::Context, app: &mut ZalStudio) {
                 ui.label(
                     egui::RichText::new(spinner)
                         .size(40.0 * s)
-                        .color(Color32::from_rgb(0, 200, 255)),
+                        .color(Color32::from_rgb(0, 229, 255)),
                 );
 
                 ui.add_space(16.0 * s);
@@ -348,7 +438,7 @@ fn draw_usb_plug_wait(ctx: &egui::Context, app: &mut ZalStudio) {
                     egui::RichText::new(pack.usb_plug_searching)
                         .size(14.0 * s)
                         .strong()
-                        .color(Color32::from_rgb(0, 200, 255)),
+                        .color(Color32::from_rgb(0, 229, 255)),
                 );
             });
         });
@@ -370,7 +460,7 @@ fn big_button(
     )
     .fill(color)
     .rounding(Rounding::same(10.0 * s))
-    .min_size(Vec2::new(width, 52.0 * s));
+    .min_size(Vec2::new(width, 72.0 * s));
     if ui.add(btn).clicked() {
         on_click();
     }
@@ -383,156 +473,470 @@ fn big_button(
 fn draw_gallery(ctx: &egui::Context, app: &mut ZalStudio) {
     let pack = l(app.lang);
     let s = touch_scale(ctx);
+    let bg_main = Color32::from_rgb(10, 15, 26);
+    let bg_card = Color32::from_rgb(17, 24, 39);
+    let bg_panel = Color32::from_rgb(10, 15, 26);
+    let text_dark = Color32::from_rgb(224, 247, 255);
+    let text_mid = Color32::from_rgb(142, 202, 230);
+    let green_accent = Color32::from_rgb(0, 229, 255);
+    let green_dark = Color32::from_rgb(0, 153, 170);
+    let red_border = Color32::from_rgb(255, 51, 102);
 
     egui::CentralPanel::default()
-        .frame(
-            Frame::none()
-                .fill(Color32::from_rgb(14, 14, 22))
-                .inner_margin(12.0 * s),
-        )
+        .frame(Frame::none().inner_margin(6.0 * s))
         .show(ctx, |ui| {
-            // Top bar
-            ui.horizontal(|ui| {
-                if nav_button(ui, "<", s).clicked() {
-                    app.screen = AppScreen::SourceSelect;
-                }
-                ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
-                    ui.label(
-                        egui::RichText::new(pack.gallery)
-                            .size(18.0 * s)
-                            .strong()
-                            .color(Color32::WHITE),
-                    );
-                });
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let queue_count = app.queue.len();
-                    let cart_label = if queue_count > 0 {
-                        format!("🛒 {}", queue_count)
-                    } else {
-                        "🛒".to_string()
-                    };
-                    if nav_button(ui, &cart_label, s).clicked() {
-                        app.screen = AppScreen::Queue;
-                    }
-                    ui.add_space(4.0 * s);
-                    if nav_button(ui, "🔄", s).clicked() {
-                        app.rescan();
-                    }
-                });
-            });
+            let full_rect = ui.max_rect();
+            ui.painter().rect_filled(full_rect, 0.0, bg_main);
 
-            ui.add_space(8.0 * s);
+            let avail_w = ui.available_width();
+            let avail_h = ui.available_height();
+            let sidebar_w = 220.0 * s;
+            let rightbar_w = 220.0 * s;
+            let center_w = avail_w - sidebar_w - rightbar_w - 16.0 * s;
+            let bottom_h = 190.0 * s;
+            let grid_h = avail_h - bottom_h - 8.0 * s;
 
             if app.photos.is_empty() {
                 ui.centered_and_justified(|ui| {
-                    ui.label(
-                        egui::RichText::new(pack.no_photos)
-                            .size(14.0 * s)
-                            .color(Color32::from_gray(120)),
-                    );
+                    ui.label(egui::RichText::new(pack.no_photos).size(16.0 * s).color(text_mid));
                 });
                 return;
             }
 
-            let photos: Vec<crate::gallery::Photo> = app.photos.clone();
-            let selected = app.selected_photo;
-            egui::ScrollArea::vertical()
-                .auto_shrink([false; 2])
-                .show(ui, |ui| {
-                    for (i, photo) in photos.iter().enumerate() {
-                        let in_queue = app.queue.iter().any(|q| q.photo_idx == i);
-                        let is_selected = i == selected;
+            // ═══════════════════════════════════════════════════════════════════
+            // MAIN HORIZONTAL: Left sidebar | Center (grid+bottom) | Right sidebar
+            // ═══════════════════════════════════════════════════════════════════
+            ui.horizontal(|ui| {
+                ui.set_height(avail_h);
 
-                        let bg = if is_selected {
-                            Color32::from_rgb(0, 110, 160)
-                        } else {
-                            Color32::from_rgb(30, 30, 45)
-                        };
+                // ── LEFT SIDEBAR ─────────────────────────────────────────────
+                ui.allocate_ui_with_layout(
+                    Vec2::new(sidebar_w, avail_h),
+                    egui::Layout::top_down(egui::Align::Center),
+                    |ui| {
+                        let sb_rect = ui.max_rect();
+                        ui.painter().rect_filled(sb_rect, 0.0, bg_panel);
 
-                        let frame = Frame::none()
-                            .fill(bg)
-                            .rounding(Rounding::same(8.0 * s))
-                            .inner_margin(10.0 * s)
-                            .stroke(Stroke::new(
-                                1.5 * s,
-                                if is_selected {
-                                    Color32::from_rgb(0, 200, 255)
-                                } else {
-                                    Color32::TRANSPARENT
-                                },
-                            ));
+                        ui.vertical_centered(|ui| {
+                            ui.add_space(8.0 * s);
 
-                        let response = frame
-                            .show(ui, |ui| {
-                                ui.horizontal(|ui| {
-                                    // Thumbnail
-                                    let thumb_size = 48.0 * s;
-                                    if let Some(texture) = app.texture_for(ctx, &photo.path) {
-                                        let tex_size = texture.size_vec2();
-                                        let aspect = tex_size.x / tex_size.y;
-                                        let (tw, th) = if aspect > 1.0 {
-                                            (thumb_size, thumb_size / aspect)
-                                        } else {
-                                            (thumb_size * aspect, thumb_size)
-                                        };
-                                        ui.add(
-                                            egui::Image::new((texture.id(), Vec2::new(tw, th)))
-                                                .rounding(Rounding::same(4.0 * s)),
-                                        );
-                                    } else {
-                                        ui.add_space(thumb_size);
-                                    }
-                                    ui.add_space(8.0 * s);
+                            // Back to source
+                            if sidebar_btn(ui, "▲", s).clicked() {
+                                app.screen = AppScreen::SourceSelect;
+                            }
+                            ui.add_space(16.0 * s);
 
-                                    ui.vertical(|ui| {
-                                        ui.label(
-                                            egui::RichText::new(&photo.file_name)
-                                                .size(14.0 * s)
-                                                .strong()
-                                                .color(Color32::WHITE),
-                                        );
-                                        ui.label(
-                                            egui::RichText::new(format!(
-                                                "{} · {}",
-                                                format_dimensions(photo.dimensions),
-                                                format_file_size(photo.file_size)
-                                            ))
-                                            .size(11.0 * s)
-                                            .color(Color32::from_gray(150)),
-                                        );
-                                    });
-                                    ui.with_layout(
-                                        egui::Layout::right_to_left(egui::Align::Center),
-                                        |ui| {
-                                            if in_queue {
-                                                ui.label(
-                                                    egui::RichText::new("✓")
-                                                        .size(18.0 * s)
-                                                        .color(Color32::from_rgb(0, 255, 150)),
+                            if sidebar_btn(ui, "◀", s).clicked() {
+                                app.screen = AppScreen::SourceSelect;
+                            }
+                            ui.add_space(6.0 * s);
+                            ui.label(egui::RichText::new("Avsluta").size(12.0 * s).color(text_dark));
+
+                            ui.add_space(28.0 * s);
+
+                            let has_sel = !app.selected_photos.is_empty();
+
+                            // Förhandsvy
+                            if sidebar_btn(ui, "🔍", s).clicked() && has_sel {
+                                app.selected_photo = app.selected_photos[0];
+                                app.current_edit = crate::app::PhotoEdit::default();
+                                app.screen = AppScreen::Preview;
+                            }
+                            ui.add_space(4.0 * s);
+                            ui.label(egui::RichText::new("Förhandsvy").size(12.0 * s).color(text_dark));
+
+                            ui.add_space(24.0 * s);
+
+                            // Redigera
+                            if sidebar_btn(ui, "✎", s).clicked() && has_sel {
+                                app.selected_photo = app.selected_photos[0];
+                                app.current_edit = crate::app::PhotoEdit::default();
+                                app.screen = AppScreen::Preview;
+                            }
+                            ui.add_space(4.0 * s);
+                            ui.label(egui::RichText::new("Redigera").size(12.0 * s).color(text_dark));
+
+                            ui.add_space(48.0 * s);
+
+                            // Gå vidare (big green arrow at bottom of sidebar)
+                            let can_go = app.total_order_copies() > 0;
+                            let go_btn = egui::Button::new(
+                                egui::RichText::new("▼").size(32.0 * s).color(Color32::WHITE),
+                            )
+                            .fill(if can_go { green_accent } else { Color32::from_rgb(50, 60, 80) })
+                            .rounding(Rounding::same(12.0 * s))
+                            .min_size(Vec2::new(88.0 * s, 88.0 * s));
+                            if ui.add(go_btn).clicked() && can_go {
+                                app.add_selected_to_queue();
+                                app.selected_photos.clear();
+                                app.photo_copies.clear();
+                                app.screen = AppScreen::Payment;
+                            }
+                            ui.add_space(2.0 * s);
+                            ui.label(egui::RichText::new("Gå vidare").size(12.0 * s).color(text_dark));
+                        });
+                    },
+                );
+
+                ui.add_space(8.0 * s);
+
+                // ── CENTER: Photo grid + bottom size controls ─────────────────
+                ui.allocate_ui_with_layout(
+                    Vec2::new(center_w, avail_h),
+                    egui::Layout::top_down(egui::Align::LEFT),
+                    |ui| {
+                        // Photo grid
+                        ui.allocate_ui_with_layout(
+                            Vec2::new(center_w, grid_h),
+                            egui::Layout::top_down(egui::Align::LEFT),
+                            |ui| {
+                                let thumb_base = 220.0;
+                                let spacing = 10.0;
+                                let cell_w = thumb_base * s + spacing * s;
+                                let cols = ((center_w / cell_w).floor() as usize).max(2);
+                                let thumb_size = thumb_base * s;
+                                let photo_count = app.photos.len();
+
+                                egui::ScrollArea::vertical().auto_shrink([false; 2]).show(ui, |ui| {
+                                    for row_start in (0..photo_count).step_by(cols) {
+                                        ui.horizontal(|ui| {
+                                            for i in row_start..(row_start + cols).min(photo_count) {
+                                                let photo_path = app.photos[i].path.clone();
+                                                let photo_file_name = app.photos[i].file_name.clone();
+                                                let is_selected = app.selected_photos.contains(&i);
+                                                let total_copies = app.total_copies_for_photo(i);
+
+                                                let _cell = ui.allocate_ui_with_layout(
+                                                    Vec2::new(thumb_size + 6.0 * s, thumb_size + 36.0 * s),
+                                                    egui::Layout::top_down(egui::Align::Center),
+                                                    |ui| {
+                                                        let cell_rect = ui.max_rect();
+                                                        let img_rect = egui::Rect::from_min_size(
+                                                            cell_rect.min + Vec2::new(3.0 * s, 3.0 * s),
+                                                            Vec2::new(thumb_size, thumb_size),
+                                                        );
+
+                                                        let stroke = if is_selected {
+                                                            Stroke::new(2.0 * s, red_border)
+                                                        } else {
+                                                            Stroke::new(1.0 * s, Color32::from_rgb(0, 229, 255))
+                                                        };
+                                                        ui.painter().rect_filled(cell_rect, 4.0 * s, bg_card);
+                                                        ui.painter().rect_stroke(cell_rect, 4.0 * s, stroke);
+
+                                                        if let Some(texture) = app.texture_for(ctx, &photo_path) {
+                                                            let tex_size = texture.size_vec2();
+                                                            let aspect = tex_size.x / tex_size.y;
+                                                            let (tw, th) = if aspect > 1.0 {
+                                                                (thumb_size, thumb_size / aspect)
+                                                            } else {
+                                                                (thumb_size * aspect, thumb_size)
+                                                            };
+                                                            let img_pos = img_rect.center() - Vec2::new(tw * 0.5, th * 0.5);
+                                                            let displayed_rect = egui::Rect::from_min_size(img_pos, Vec2::new(tw, th));
+                                                            ui.painter().image(
+                                                                texture.id(),
+                                                                displayed_rect,
+                                                                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                                                                Color32::WHITE,
+                                                            );
+
+                                                            // Draw red dashed crop guide for selected paper size
+                                                            let selected_size = &app.selected_product_size;
+                                                            let paper_aspect = paper_size_aspect(selected_size);
+                                                            let img_aspect = tw / th.max(1.0);
+                                                            let (crop_w, crop_h) = if img_aspect > paper_aspect {
+                                                                (th * paper_aspect, th)
+                                                            } else {
+                                                                (tw, tw / paper_aspect.max(0.01))
+                                                            };
+                                                            let crop_rect = egui::Rect::from_center_size(
+                                                                displayed_rect.center(),
+                                                                Vec2::new(crop_w, crop_h),
+                                                            );
+                                                            draw_dashed_rect(ui.painter(), crop_rect, Stroke::new(1.5 * s, Color32::from_rgb(255, 51, 102)), 6.0 * s, 4.0 * s);
+                                                        }
+
+                                                        let resp = ui.interact(cell_rect, ui.id().with(i), egui::Sense::click());
+                                                        if resp.clicked() {
+                                                            if is_selected {
+                                                                app.selected_photos.retain(|&x| x != i);
+                                                            } else {
+                                                                app.selected_photos.push(i);
+                                                            }
+                                                            app.selected_photo = i;
+                                                        }
+
+                                                        let label_rect = egui::Rect::from_min_max(
+                                                            egui::pos2(cell_rect.min.x, img_rect.max.y + 1.0 * s),
+                                                            egui::pos2(cell_rect.max.x, cell_rect.max.y),
+                                                        );
+                                                        ui.allocate_ui_at_rect(label_rect, |ui| {
+                                                            ui.vertical_centered(|ui| {
+                                                                ui.label(
+                                                                    egui::RichText::new(&photo_file_name)
+                                                                        .size(8.0 * s)
+                                                                        .color(text_dark),
+                                                                );
+                                                            });
+                                                        });
+
+                                                        if total_copies > 0 {
+                                                            let badge_r = 16.0 * s;
+                                                            let badge_center = cell_rect.max - Vec2::new(badge_r + 3.0 * s, badge_r + 3.0 * s);
+                                                            ui.painter().circle_filled(badge_center, badge_r, green_accent);
+                                                            let galley = ui.painter().layout(
+                                                                total_copies.to_string(),
+                                                                egui::FontId::new(13.0 * s, egui::FontFamily::Proportional),
+                                                                Color32::WHITE,
+                                                                f32::INFINITY,
+                                                            );
+                                                            let text_pos = badge_center - galley.rect.size() * 0.5;
+                                                            ui.painter().galley(text_pos, galley, Color32::WHITE);
+                                                        }
+
+                                                        resp
+                                                    },
                                                 );
                                             }
-                                        },
-                                    );
+                                        });
+                                        ui.add_space(4.0 * s);
+                                    }
                                 });
-                            })
-                            .response;
+                            },
+                        );
 
-                        if response.clicked() {
-                            app.selected_photo = i;
-                            app.current_edit = crate::app::PhotoEdit::default();
-                            app.screen = AppScreen::Preview;
-                        }
-                    }
-                });
+                        ui.add_space(6.0 * s);
+
+                        // Bottom size control strips (horizontal)
+                        ui.allocate_ui_with_layout(
+                            Vec2::new(center_w, bottom_h),
+                            egui::Layout::top_down(egui::Align::LEFT),
+                            |ui| {
+                                let bot_rect = ui.max_rect();
+                                ui.painter().rect_filled(bot_rect, 6.0 * s, bg_panel);
+
+                                let selected_indices: Vec<usize> = app.selected_photos.clone();
+                                let first_sel = selected_indices.first().copied();
+                                let has_sel = !selected_indices.is_empty();
+
+                                ui.horizontal(|ui| {
+                                    ui.add_space(8.0 * s);
+
+                                    // Warning text (left side of bottom)
+                                    ui.vertical(|ui| {
+                                        ui.add_space(8.0 * s);
+                                        ui.label(egui::RichText::new("⚠").size(24.0 * s).color(Color32::from_rgb(255, 200, 0)));
+                                        ui.add_space(2.0 * s);
+                                        ui.label(
+                                            egui::RichText::new("Visas denna ikon under bilden så är det otillräcklig kvalitet.")
+                                                .size(11.0 * s)
+                                                .color(text_mid),
+                                        );
+                                    });
+
+                                    ui.add_space(16.0 * s);
+
+                                    // Size strip for selected product size only
+                                    let size = app.selected_product_size.clone();
+                                    let price = app.config.price_for_size(&size);
+                                    let counts: Vec<u32> = selected_indices.iter().map(|&i| app.photo_copy_count(i, &size)).collect();
+                                    let count_text = if counts.len() > 1 {
+                                        let first = counts[0];
+                                        if counts.iter().all(|&c| c == first) {
+                                            format!("{}", first)
+                                        } else {
+                                            "—".to_string()
+                                        }
+                                    } else {
+                                        format!("{}", counts.first().copied().unwrap_or(0))
+                                    };
+
+                                    ui.vertical(|ui| {
+                                        ui.add_space(6.0 * s);
+                                        ui.label(
+                                            egui::RichText::new(format!("Skriv ut {} · {:.0} kr", size, price))
+                                                .size(13.0 * s)
+                                                .strong()
+                                                .color(text_dark),
+                                        );
+                                        ui.add_space(4.0 * s);
+                                        ui.horizontal(|ui| {
+                                            let minus = egui::Button::new(
+                                                egui::RichText::new("−").size(24.0 * s).color(Color32::WHITE),
+                                            )
+                                            .fill(Color32::from_rgb(30, 40, 60))
+                                            .rounding(Rounding::same(8.0 * s))
+                                            .min_size(Vec2::new(56.0 * s, 56.0 * s));
+                                            if ui.add(minus).clicked() && has_sel {
+                                                for &idx in &selected_indices {
+                                                    let cur = app.photo_copy_count(idx, &size);
+                                                    if cur > 0 { app.set_photo_copy_count(idx, &size, cur - 1); }
+                                                }
+                                            }
+
+                                            ui.add_space(4.0 * s);
+                                            ui.label(
+                                                egui::RichText::new(&count_text)
+                                                    .size(24.0 * s)
+                                                    .strong()
+                                                    .color(text_dark),
+                                            );
+                                            ui.add_space(4.0 * s);
+
+                                            let plus = egui::Button::new(
+                                                egui::RichText::new("+").size(24.0 * s).color(Color32::WHITE),
+                                            )
+                                            .fill(Color32::from_rgb(30, 40, 60))
+                                            .rounding(Rounding::same(8.0 * s))
+                                            .min_size(Vec2::new(56.0 * s, 56.0 * s));
+                                            if ui.add(plus).clicked() && has_sel {
+                                                for &idx in &selected_indices {
+                                                    let cur = app.photo_copy_count(idx, &size);
+                                                    app.set_photo_copy_count(idx, &size, cur + 1);
+                                                }
+                                            }
+                                        });
+                                    });
+
+                                    // Total
+                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                        ui.add_space(8.0 * s);
+                                        let total_copies = app.total_order_copies();
+                                        let total_price = app.total_order_price();
+                                        ui.vertical(|ui| {
+                                            ui.add_space(8.0 * s);
+                                            ui.label(
+                                                egui::RichText::new(format!("{} utskrifter · {:.0} kr", total_copies, total_price))
+                                                    .size(15.0 * s)
+                                                    .strong()
+                                                    .color(green_dark),
+                                            );
+                                        });
+                                    });
+                                });
+                            },
+                        );
+                    },
+                );
+
+                ui.add_space(8.0 * s);
+
+                // ── RIGHT SIDEBAR ────────────────────────────────────────────
+                ui.allocate_ui_with_layout(
+                    Vec2::new(rightbar_w, avail_h),
+                    egui::Layout::top_down(egui::Align::Center),
+                    |ui| {
+                        let rs_rect = ui.max_rect();
+                        ui.painter().rect_filled(rs_rect, 0.0, bg_panel);
+
+                        ui.vertical_centered(|ui| {
+                            ui.add_space(8.0 * s);
+
+                            // Bildordning title
+                            ui.label(
+                                egui::RichText::new("Bildordning")
+                                    .size(14.0 * s)
+                                    .strong()
+                                    .color(text_dark),
+                            );
+                            ui.add_space(12.0 * s);
+
+                            // Sortingläge label
+                            let sort_label = match app.gallery_sort {
+                                crate::app::GallerySort::Date => pack.sort_by_date,
+                                crate::app::GallerySort::Name => pack.sort_by_name,
+                            };
+                            ui.label(
+                                egui::RichText::new(sort_label)
+                                    .size(12.0 * s)
+                                    .color(text_mid),
+                            );
+                            ui.add_space(8.0 * s);
+
+                            // Sort buttons with clear text labels
+                            let date_btn = egui::Button::new(
+                                egui::RichText::new("Datum")
+                                    .size(18.0 * s)
+                                    .strong()
+                                    .color(Color32::WHITE),
+                            )
+                            .fill(if matches!(app.gallery_sort, crate::app::GallerySort::Date) {
+                                Color32::from_rgb(0, 229, 255)
+                            } else {
+                                Color32::from_rgb(40, 50, 70)
+                            })
+                            .rounding(Rounding::same(10.0 * s))
+                            .min_size(Vec2::new(200.0 * s, 88.0 * s));
+                            if ui.add(date_btn).clicked() {
+                                app.gallery_sort = crate::app::GallerySort::Date;
+                                app.apply_gallery_sort();
+                            }
+                            ui.add_space(8.0 * s);
+
+                            let name_btn = egui::Button::new(
+                                egui::RichText::new("Namn")
+                                    .size(18.0 * s)
+                                    .strong()
+                                    .color(Color32::WHITE),
+                            )
+                            .fill(if matches!(app.gallery_sort, crate::app::GallerySort::Name) {
+                                Color32::from_rgb(0, 229, 255)
+                            } else {
+                                Color32::from_rgb(40, 50, 70)
+                            })
+                            .rounding(Rounding::same(10.0 * s))
+                            .min_size(Vec2::new(200.0 * s, 88.0 * s));
+                            if ui.add(name_btn).clicked() {
+                                app.gallery_sort = crate::app::GallerySort::Name;
+                                app.apply_gallery_sort();
+                            }
+                            ui.add_space(8.0 * s);
+
+                            let dir_label = if app.gallery_sort_ascending { "Stigande ▲" } else { "Fallande ▼" };
+                            let dir_btn = egui::Button::new(
+                                egui::RichText::new(dir_label)
+                                    .size(16.0 * s)
+                                    .color(Color32::WHITE),
+                            )
+                            .fill(Color32::from_rgb(40, 50, 70))
+                            .rounding(Rounding::same(10.0 * s))
+                            .min_size(Vec2::new(200.0 * s, 88.0 * s));
+                            if ui.add(dir_btn).clicked() {
+                                app.gallery_sort_ascending = !app.gallery_sort_ascending;
+                                app.apply_gallery_sort();
+                            }
+                        });
+                    },
+                );
+            });
         });
+}
+
+/// Small square sidebar icon button
+fn sidebar_btn(ui: &mut egui::Ui, label: &str, s: f32) -> egui::Response {
+    ui.add(
+        egui::Button::new(
+            egui::RichText::new(label)
+                .size(32.0 * s)
+                .color(Color32::WHITE),
+        )
+        .fill(Color32::from_rgb(40, 50, 70))
+        .rounding(Rounding::same(12.0 * s))
+        .min_size(Vec2::new(120.0 * s, 120.0 * s)),
+    )
 }
 
 fn nav_button(ui: &mut egui::Ui, label: &str, s: f32) -> egui::Response {
     ui.add(
-        egui::Button::new(egui::RichText::new(label).size(16.0 * s).color(Color32::WHITE))
-            .fill(Color32::from_rgb(40, 40, 58))
-            .rounding(Rounding::same(8.0 * s))
-            .min_size(Vec2::new(44.0 * s, 44.0 * s)),
+        egui::Button::new(
+            egui::RichText::new(label)
+                .size(26.0 * s)
+                .color(Color32::WHITE),
+        )
+        .fill(Color32::from_rgb(40, 50, 70))
+        .rounding(Rounding::same(12.0 * s))
+        .min_size(Vec2::new(88.0 * s, 88.0 * s)),
     )
 }
 
@@ -611,6 +1015,77 @@ fn calculate_crop_uvs(
 }
 
 /// Draw an image with rotation / zoom / pan applied via custom mesh.
+/// Draw a rectangle with dashed lines (segments).
+fn draw_dashed_rect(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    stroke: Stroke,
+    dash_len: f32,
+    gap_len: f32,
+) {
+    let step = dash_len + gap_len;
+
+    // Top edge
+    let mut x = rect.min.x;
+    while x < rect.max.x {
+        let seg_start = x;
+        let seg_end = (x + dash_len).min(rect.max.x);
+        painter.line_segment(
+            [
+                egui::pos2(seg_start, rect.min.y),
+                egui::pos2(seg_end, rect.min.y),
+            ],
+            stroke,
+        );
+        x += step;
+    }
+
+    // Bottom edge
+    x = rect.min.x;
+    while x < rect.max.x {
+        let seg_start = x;
+        let seg_end = (x + dash_len).min(rect.max.x);
+        painter.line_segment(
+            [
+                egui::pos2(seg_start, rect.max.y),
+                egui::pos2(seg_end, rect.max.y),
+            ],
+            stroke,
+        );
+        x += step;
+    }
+
+    // Left edge
+    let mut y = rect.min.y;
+    while y < rect.max.y {
+        let seg_start = y;
+        let seg_end = (y + dash_len).min(rect.max.y);
+        painter.line_segment(
+            [
+                egui::pos2(rect.min.x, seg_start),
+                egui::pos2(rect.min.x, seg_end),
+            ],
+            stroke,
+        );
+        y += step;
+    }
+
+    // Right edge
+    y = rect.min.y;
+    while y < rect.max.y {
+        let seg_start = y;
+        let seg_end = (y + dash_len).min(rect.max.y);
+        painter.line_segment(
+            [
+                egui::pos2(rect.max.x, seg_start),
+                egui::pos2(rect.max.x, seg_end),
+            ],
+            stroke,
+        );
+        y += step;
+    }
+}
+
 fn draw_editable_image(
     painter: &egui::Painter,
     texture_id: egui::TextureId,
@@ -647,13 +1122,16 @@ fn draw_preview(ctx: &egui::Context, app: &mut ZalStudio) {
     let pack = l(app.lang);
     let s = touch_scale(ctx);
 
+    let bg_main = Color32::from_rgb(10, 15, 26);
+    let text_dark = Color32::from_rgb(224, 247, 255);
+    let text_mid = Color32::from_rgb(142, 202, 230);
+
     egui::CentralPanel::default()
-        .frame(
-            Frame::none()
-                .fill(Color32::from_rgb(14, 14, 22))
-                .inner_margin(8.0 * s),
-        )
+        .frame(Frame::none().fill(bg_main).inner_margin(8.0 * s))
         .show(ctx, |ui| {
+            let rect = ui.max_rect();
+            ui.painter().rect_filled(rect, 0.0, bg_main);
+
             // ── Top bar ─────────────────────────────────────────────────
             ui.horizontal(|ui| {
                 if nav_button(ui, "<", s).clicked() {
@@ -662,43 +1140,38 @@ fn draw_preview(ctx: &egui::Context, app: &mut ZalStudio) {
                 ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
                     ui.label(
                         egui::RichText::new(pack.preview)
-                            .size(16.0 * s)
+                            .size(20.0 * s)
                             .strong()
-                            .color(Color32::WHITE),
+                            .color(text_dark),
                     );
                 });
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let queue_count = app.queue.len();
-                    let cart_label = if queue_count > 0 {
-                        format!("🛒 {}", queue_count)
-                    } else {
-                        "🛒".to_string()
-                    };
-                    if nav_button(ui, &cart_label, s).clicked() {
-                        app.screen = AppScreen::Queue;
+                    let reset_btn = egui::Button::new(
+                        egui::RichText::new("Återställ")
+                            .size(13.0 * s)
+                            .color(Color32::WHITE),
+                    )
+                    .fill(Color32::from_rgb(50, 60, 80))
+                    .rounding(Rounding::same(8.0 * s))
+                    .min_size(Vec2::new(120.0 * s, 64.0 * s));
+                    if ui.add(reset_btn).clicked() {
+                        app.current_edit = crate::app::PhotoEdit::default();
                     }
                 });
             });
 
             ui.add_space(4.0 * s);
 
-            // ── Image area ──────────────────────────────────────────────
-            let paper_size = app
-                .config
-                .paper_sizes
-                .get(app.paper_size_idx)
-                .cloned()
-                .unwrap_or_else(|| "10x15".to_string());
+            // ── Image area (storbild) ───────────────────────────────────
+            let paper_size = app.selected_product_size.clone();
             let frame_aspect = paper_size_aspect(&paper_size);
 
-            // Extract texture info in a limited scope so mutable borrow ends
             let tex_info = app.selected_texture(ctx).map(|t| (t.id(), t.size_vec2()));
 
             if let Some((tex_id, tex_size)) = tex_info {
-                // Allocate image area: fit within available width, use paper aspect ratio
                 let available = ui.available_size();
                 let max_img_w = available.x;
-                let max_img_h = available.y * 0.66; // reserve ~34% for controls
+                let max_img_h = available.y * 0.72; // bigger image, ~28% for controls
                 let img_w = max_img_w.min(max_img_h * frame_aspect);
                 let img_h = img_w / frame_aspect;
 
@@ -726,258 +1199,303 @@ fn draw_preview(ctx: &egui::Context, app: &mut ZalStudio) {
                 );
 
                 let painter = ui.painter();
-                // Dark background behind the image
-                painter.rect_filled(img_rect, 4.0 * s, Color32::from_rgb(8, 8, 14));
+                // Background
+                painter.rect_filled(img_rect, 4.0 * s, Color32::from_rgb(0, 229, 255));
                 // The image
                 draw_editable_image(painter, tex_id, img_rect, uvs, Color32::WHITE);
-                // Print frame border
-                painter.rect_stroke(
+                // Red dashed crop guide showing print area
+                draw_dashed_rect(
+                    painter,
                     img_rect,
-                    4.0 * s,
-                    Stroke::new(2.5 * s, Color32::from_rgb(0, 200, 255)),
+                    Stroke::new(2.5 * s, Color32::from_rgb(255, 51, 102)),
+                    10.0 * s,
+                    6.0 * s,
                 );
-                // Corner marks for "crop" feel
-                let corner_len = 12.0 * s;
-                let corners = [
-                    (
-                        img_rect.left_top(),
-                        Vec2::new(1.0, 0.0),
-                        Vec2::new(0.0, 1.0),
-                    ),
-                    (
-                        img_rect.right_top(),
-                        Vec2::new(-1.0, 0.0),
-                        Vec2::new(0.0, 1.0),
-                    ),
-                    (
-                        img_rect.right_bottom(),
-                        Vec2::new(-1.0, 0.0),
-                        Vec2::new(0.0, -1.0),
-                    ),
-                    (
-                        img_rect.left_bottom(),
-                        Vec2::new(1.0, 0.0),
-                        Vec2::new(0.0, -1.0),
-                    ),
-                ];
-                for (pos, dx, dy) in corners {
-                    let a = pos + dx * corner_len;
-                    let b = pos + dy * corner_len;
-                    painter.line_segment(
-                        [pos, a],
-                        Stroke::new(2.0 * s, Color32::from_rgb(0, 200, 255)),
+
+                // Text overlay preview
+                if !app.current_edit.text_overlay.is_empty() {
+                    let text_pos = egui::pos2(
+                        img_rect.min.x + app.current_edit.text_x * img_rect.width(),
+                        img_rect.min.y + app.current_edit.text_y * img_rect.height(),
                     );
-                    painter.line_segment(
-                        [pos, b],
-                        Stroke::new(2.0 * s, Color32::from_rgb(0, 200, 255)),
+                    let font_size = (app.current_edit.text_size as f32)
+                        .min(img_h * 0.15)
+                        .max(12.0)
+                        * s;
+                    // Draw text shadow for readability
+                    for dx in [-1.0, 1.0] {
+                        for dy in [-1.0, 1.0] {
+                            painter.text(
+                                text_pos + Vec2::new(dx * 2.0 * s, dy * 2.0 * s),
+                                egui::Align2::CENTER_CENTER,
+                                &app.current_edit.text_overlay,
+                                egui::FontId::new(font_size, egui::FontFamily::Proportional),
+                                Color32::from_rgb(0, 0, 0),
+                            );
+                        }
+                    }
+                    painter.text(
+                        text_pos,
+                        egui::Align2::CENTER_CENTER,
+                        &app.current_edit.text_overlay,
+                        egui::FontId::new(font_size, egui::FontFamily::Proportional),
+                        Color32::WHITE,
                     );
                 }
             } else {
                 ui.centered_and_justified(|ui| {
-                    ui.label(
-                        egui::RichText::new("—")
-                            .size(20.0 * s)
-                            .color(Color32::from_gray(100)),
-                    );
+                    ui.label(egui::RichText::new("—").size(20.0 * s).color(text_mid));
                 });
             }
 
-            ui.add_space(6.0 * s);
+            ui.add_space(4.0 * s);
 
             // ── Controls ────────────────────────────────────────────────
             ui.vertical_centered(|ui| {
-                // Row 1: Edit tools
+                ui.set_enabled(!app.save_in_progress);
+
+                // Row 1: Edit tools (touch-friendly)
                 ui.horizontal(|ui| {
                     // Zoom out
                     let zoom_out = egui::Button::new(
                         egui::RichText::new("−")
-                            .size(16.0 * s)
+                            .size(20.0 * s)
                             .strong()
                             .color(Color32::WHITE),
                     )
-                    .fill(Color32::from_rgb(45, 45, 65))
-                    .rounding(Rounding::same(6.0 * s))
-                    .min_size(Vec2::new(44.0 * s, 36.0 * s));
+                    .fill(Color32::from_rgb(50, 60, 80))
+                    .rounding(Rounding::same(8.0 * s))
+                    .min_size(Vec2::new(72.0 * s, 64.0 * s));
                     if ui.add(zoom_out).clicked() && app.current_edit.zoom > 1.0 {
                         app.current_edit.zoom = (app.current_edit.zoom / 1.2).max(1.0);
                     }
                     ui.label(
                         egui::RichText::new(format!("{:.1}x", app.current_edit.zoom))
-                            .size(13.0 * s)
-                            .color(Color32::from_gray(180)),
+                            .size(15.0 * s)
+                            .color(text_mid),
                     );
                     // Zoom in
                     let zoom_in = egui::Button::new(
                         egui::RichText::new("+")
-                            .size(16.0 * s)
+                            .size(20.0 * s)
                             .strong()
                             .color(Color32::WHITE),
                     )
-                    .fill(Color32::from_rgb(45, 45, 65))
-                    .rounding(Rounding::same(6.0 * s))
-                    .min_size(Vec2::new(44.0 * s, 36.0 * s));
+                    .fill(Color32::from_rgb(50, 60, 80))
+                    .rounding(Rounding::same(8.0 * s))
+                    .min_size(Vec2::new(72.0 * s, 64.0 * s));
                     if ui.add(zoom_in).clicked() && app.current_edit.zoom < 5.0 {
                         app.current_edit.zoom = (app.current_edit.zoom * 1.2).min(5.0);
                     }
 
-                    ui.add_space(10.0 * s);
+                    ui.add_space(16.0 * s);
 
                     // Rotate left
                     let rot_left = egui::Button::new(
-                        egui::RichText::new("↺")
-                            .size(14.0 * s)
+                        egui::RichText::new("↺ Vänster")
+                            .size(13.0 * s)
                             .color(Color32::WHITE),
                     )
-                    .fill(Color32::from_rgb(45, 45, 65))
-                    .rounding(Rounding::same(6.0 * s))
-                    .min_size(Vec2::new(44.0 * s, 36.0 * s));
+                    .fill(Color32::from_rgb(50, 60, 80))
+                    .rounding(Rounding::same(8.0 * s))
+                    .min_size(Vec2::new(120.0 * s, 64.0 * s));
                     if ui.add(rot_left).clicked() {
                         app.current_edit.rotation = (app.current_edit.rotation + 270) % 360;
                     }
                     // Rotate right
                     let rot_right = egui::Button::new(
-                        egui::RichText::new("↻")
-                            .size(14.0 * s)
+                        egui::RichText::new("Höger ↻")
+                            .size(13.0 * s)
                             .color(Color32::WHITE),
                     )
-                    .fill(Color32::from_rgb(45, 45, 65))
-                    .rounding(Rounding::same(6.0 * s))
-                    .min_size(Vec2::new(44.0 * s, 36.0 * s));
+                    .fill(Color32::from_rgb(50, 60, 80))
+                    .rounding(Rounding::same(8.0 * s))
+                    .min_size(Vec2::new(120.0 * s, 64.0 * s));
                     if ui.add(rot_right).clicked() {
                         app.current_edit.rotation = (app.current_edit.rotation + 90) % 360;
                     }
 
-                    ui.add_space(10.0 * s);
+                    ui.add_space(16.0 * s);
 
                     // B&W toggle
                     let bw_text = if app.current_edit.grayscale {
-                        "B&W ✓"
+                        "Svartvitt ✓"
                     } else {
-                        "B&W"
+                        "Svartvitt"
                     };
                     let bw_btn = egui::Button::new(
                         egui::RichText::new(bw_text)
-                            .size(12.0 * s)
+                            .size(13.0 * s)
                             .color(Color32::WHITE),
                     )
                     .fill(if app.current_edit.grayscale {
-                        Color32::from_rgb(80, 80, 80)
+                        Color32::from_rgb(0, 229, 255)
                     } else {
-                        Color32::from_rgb(45, 45, 65)
+                        Color32::from_rgb(50, 60, 80)
                     })
-                    .rounding(Rounding::same(6.0 * s))
-                    .min_size(Vec2::new(56.0 * s, 36.0 * s));
+                    .rounding(Rounding::same(8.0 * s))
+                    .min_size(Vec2::new(140.0 * s, 64.0 * s));
                     if ui.add(bw_btn).clicked() {
                         app.current_edit.grayscale = !app.current_edit.grayscale;
                     }
                 });
 
-                ui.add_space(4.0 * s);
-
-                // Row 2: Paper size
-                let printer_label = app
-                    .printer_for_current_size()
-                    .unwrap_or(pack.no_printer_for_size);
-                ui.label(
-                    egui::RichText::new(format!(
-                        "{}: {}  ·  {}: {}",
-                        pack.paper_size,
-                        app.config.paper_sizes[app.paper_size_idx],
-                        pack.printer_for_size,
-                        printer_label
-                    ))
-                    .size(11.0 * s)
-                    .color(Color32::from_gray(160)),
-                );
-                ui.add_space(2.0 * s);
-                ui.horizontal(|ui| {
-                    for (i, size) in app.config.paper_sizes.iter().enumerate() {
-                        let is_selected = i == app.paper_size_idx;
-                        let btn = egui::Button::new(
-                            egui::RichText::new(size).size(13.0 * s).strong().color(
-                                if is_selected {
-                                    Color32::WHITE
-                                } else {
-                                    Color32::from_gray(200)
-                                },
-                            ),
-                        )
-                        .fill(if is_selected {
-                            Color32::from_rgb(0, 130, 190)
-                        } else {
-                            Color32::from_rgb(40, 40, 55)
-                        })
-                        .rounding(Rounding::same(6.0 * s))
-                        .min_size(Vec2::new(72.0 * s, 34.0 * s));
-                        if ui.add(btn).clicked() {
-                            app.paper_size_idx = i;
-                        }
-                        ui.add_space(4.0 * s);
-                    }
-                });
-
-                ui.add_space(4.0 * s);
-
-                // Row 3: Copies
-                ui.horizontal(|ui| {
-                    let minus = egui::Button::new(egui::RichText::new("−").size(16.0 * s).strong())
-                        .fill(Color32::from_rgb(45, 45, 65))
-                        .rounding(Rounding::same(6.0 * s))
-                        .min_size(Vec2::new(40.0 * s, 34.0 * s));
-                    if ui.add(minus).clicked() && app.copies > 1 {
-                        app.copies -= 1;
-                    }
-                    ui.add_space(10.0 * s);
-                    ui.label(
-                        egui::RichText::new(format!("{} {}", app.copies, pack.copies))
-                            .size(14.0 * s)
-                            .strong()
-                            .color(Color32::from_rgb(0, 200, 255)),
-                    );
-                    ui.add_space(10.0 * s);
-                    let plus = egui::Button::new(egui::RichText::new("+").size(16.0 * s).strong())
-                        .fill(Color32::from_rgb(45, 45, 65))
-                        .rounding(Rounding::same(6.0 * s))
-                        .min_size(Vec2::new(40.0 * s, 34.0 * s));
-                    if ui.add(plus).clicked() && app.copies < 99 {
-                        app.copies += 1;
-                    }
-                });
-
                 ui.add_space(6.0 * s);
 
-                // Row 4: Actions
-                let btn_width = ui.available_width().min(300.0 * s);
-                let add_btn = egui::Button::new(
-                    egui::RichText::new(format!("➕ {}", pack.add_to_queue))
-                        .size(14.0 * s)
-                        .strong()
-                        .color(Color32::WHITE),
-                )
-                .fill(Color32::from_rgb(0, 140, 100))
-                .rounding(Rounding::same(8.0 * s))
-                .min_size(Vec2::new(btn_width, 42.0 * s));
-                if ui.add(add_btn).clicked() {
-                    app.add_to_queue();
-                }
+                // Row 2: Text overlay
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Text:").size(13.0 * s).color(text_mid));
+                    ui.add_space(4.0 * s);
+                    let text_edit = egui::TextEdit::singleline(&mut app.current_edit.text_overlay)
+                        .font(egui::TextStyle::Body)
+                        .hint_text("Skriv text här...")
+                        .desired_width(240.0 * s);
+                    ui.add(text_edit);
+                    ui.add_space(8.0 * s);
 
-                ui.add_space(3.0 * s);
+                    // Text position arrows
+                    let up_btn = egui::Button::new(
+                        egui::RichText::new("▲")
+                            .size(16.0 * s)
+                            .color(Color32::WHITE),
+                    )
+                    .fill(Color32::from_rgb(50, 60, 80))
+                    .rounding(Rounding::same(6.0 * s))
+                    .min_size(Vec2::new(56.0 * s, 56.0 * s));
+                    if ui.add(up_btn).clicked() {
+                        app.current_edit.text_y = (app.current_edit.text_y - 0.05).max(0.05);
+                    }
+                    let down_btn = egui::Button::new(
+                        egui::RichText::new("▼")
+                            .size(16.0 * s)
+                            .color(Color32::WHITE),
+                    )
+                    .fill(Color32::from_rgb(50, 60, 80))
+                    .rounding(Rounding::same(6.0 * s))
+                    .min_size(Vec2::new(56.0 * s, 56.0 * s));
+                    if ui.add(down_btn).clicked() {
+                        app.current_edit.text_y = (app.current_edit.text_y + 0.05).min(0.95);
+                    }
+                    let left_btn = egui::Button::new(
+                        egui::RichText::new("◀")
+                            .size(16.0 * s)
+                            .color(Color32::WHITE),
+                    )
+                    .fill(Color32::from_rgb(50, 60, 80))
+                    .rounding(Rounding::same(6.0 * s))
+                    .min_size(Vec2::new(56.0 * s, 56.0 * s));
+                    if ui.add(left_btn).clicked() {
+                        app.current_edit.text_x = (app.current_edit.text_x - 0.05).max(0.05);
+                    }
+                    let right_btn = egui::Button::new(
+                        egui::RichText::new("▶")
+                            .size(16.0 * s)
+                            .color(Color32::WHITE),
+                    )
+                    .fill(Color32::from_rgb(50, 60, 80))
+                    .rounding(Rounding::same(6.0 * s))
+                    .min_size(Vec2::new(56.0 * s, 56.0 * s));
+                    if ui.add(right_btn).clicked() {
+                        app.current_edit.text_x = (app.current_edit.text_x + 0.05).min(0.95);
+                    }
 
-                let queue_count = app.queue.len();
-                let cart_btn = egui::Button::new(
+                    ui.add_space(8.0 * s);
+
+                    // Text size
+                    ui.label(
+                        egui::RichText::new(format!("Storlek: {}", app.current_edit.text_size))
+                            .size(12.0 * s)
+                            .color(text_mid),
+                    );
+                    let txt_minus = egui::Button::new(
+                        egui::RichText::new("−")
+                            .size(14.0 * s)
+                            .color(Color32::WHITE),
+                    )
+                    .fill(Color32::from_rgb(50, 60, 80))
+                    .rounding(Rounding::same(6.0 * s))
+                    .min_size(Vec2::new(48.0 * s, 48.0 * s));
+                    if ui.add(txt_minus).clicked() && app.current_edit.text_size > 12 {
+                        app.current_edit.text_size -= 4;
+                    }
+                    let txt_plus = egui::Button::new(
+                        egui::RichText::new("+")
+                            .size(14.0 * s)
+                            .color(Color32::WHITE),
+                    )
+                    .fill(Color32::from_rgb(50, 60, 80))
+                    .rounding(Rounding::same(6.0 * s))
+                    .min_size(Vec2::new(48.0 * s, 48.0 * s));
+                    if ui.add(txt_plus).clicked() && app.current_edit.text_size < 200 {
+                        app.current_edit.text_size += 4;
+                    }
+                });
+
+                ui.add_space(4.0 * s);
+
+                // Paper size label (read-only since single-size mode)
+                ui.label(
                     egui::RichText::new(format!(
-                        "🛒 {} ({})",
-                        pack.print_queue_bottom, queue_count
+                        "Format: {} · {}",
+                        paper_size,
+                        app.printer_for_current_size()
+                            .unwrap_or(pack.no_printer_for_size)
                     ))
-                    .size(14.0 * s)
-                    .strong()
-                    .color(Color32::WHITE),
-                )
-                .fill(Color32::from_rgb(0, 120, 180))
-                .rounding(Rounding::same(8.0 * s))
-                .min_size(Vec2::new(btn_width, 42.0 * s));
-                if ui.add(cart_btn).clicked() {
-                    app.screen = AppScreen::Queue;
+                    .size(13.0 * s)
+                    .color(text_mid),
+                );
+
+                ui.add_space(12.0 * s);
+
+                // Actions: Save and Back
+                let btn_width = ui.available_width().min(360.0 * s);
+                // Saving spinner overlay
+                if app.save_in_progress {
+                    ui.vertical_centered(|ui| {
+                        ui.add_space(20.0 * s);
+                        let time = ui.ctx().input(|i| i.time);
+                        let spinner = ["◐", "◑", "◒", "◓"][(time * 4.0) as usize % 4];
+                        ui.label(
+                            egui::RichText::new(spinner)
+                                .size(48.0 * s)
+                                .color(Color32::from_rgb(0, 229, 255)),
+                        );
+                        ui.add_space(8.0 * s);
+                        ui.label(
+                            egui::RichText::new("Sparar...")
+                                .size(18.0 * s)
+                                .strong()
+                                .color(text_dark),
+                        );
+                    });
+                } else {
+                    let save_btn = egui::Button::new(
+                        egui::RichText::new("💾 Spara och gå tillbaka")
+                            .size(18.0 * s)
+                            .strong()
+                            .color(Color32::WHITE),
+                    )
+                    .fill(Color32::from_rgb(0, 229, 255))
+                    .rounding(Rounding::same(12.0 * s))
+                    .min_size(Vec2::new(btn_width, 72.0 * s));
+                    if ui.add(save_btn).clicked() {
+                        app.start_save_edit_thread();
+                    }
+
+                    ui.add_space(6.0 * s);
+
+                    let back_btn = egui::Button::new(
+                        egui::RichText::new("Tillbaka utan att spara")
+                            .size(14.0 * s)
+                            .color(text_mid),
+                    )
+                    .fill(Color32::from_rgb(30, 40, 60))
+                    .rounding(Rounding::same(10.0 * s))
+                    .min_size(Vec2::new(btn_width, 64.0 * s));
+                    if ui.add(back_btn).clicked() {
+                        app.current_edit = crate::app::PhotoEdit::default();
+                        app.screen = AppScreen::Gallery;
+                    }
                 }
             });
         });
@@ -990,13 +1508,15 @@ fn draw_queue(ctx: &egui::Context, app: &mut ZalStudio) {
     let pack = l(app.lang);
     let s = touch_scale(ctx);
 
+    let bg_main = Color32::from_rgb(10, 15, 26);
+    let text_dark = Color32::from_rgb(224, 247, 255);
+
     egui::CentralPanel::default()
-        .frame(
-            Frame::none()
-                .fill(Color32::from_rgb(14, 14, 22))
-                .inner_margin(12.0 * s),
-        )
+        .frame(Frame::none().fill(bg_main).inner_margin(12.0 * s))
         .show(ctx, |ui| {
+            let rect = ui.max_rect();
+            ui.painter().rect_filled(rect, 0.0, bg_main);
+
             // Top bar
             ui.horizontal(|ui| {
                 if nav_button(ui, "<", s).clicked() {
@@ -1007,7 +1527,7 @@ fn draw_queue(ctx: &egui::Context, app: &mut ZalStudio) {
                         egui::RichText::new(pack.print_queue_bottom)
                             .size(18.0 * s)
                             .strong()
-                            .color(Color32::WHITE),
+                            .color(text_dark),
                     );
                 });
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1036,7 +1556,7 @@ fn draw_queue(ctx: &egui::Context, app: &mut ZalStudio) {
                     ui.label(
                         egui::RichText::new(pack.queue_empty)
                             .size(14.0 * s)
-                            .color(Color32::from_gray(120)),
+                            .color(Color32::from_rgb(180, 200, 220)),
                     );
                 });
             } else {
@@ -1054,7 +1574,7 @@ fn draw_queue(ctx: &egui::Context, app: &mut ZalStudio) {
                             let copy_word = crate::lang::copies_word(app.lang, item.copies);
 
                             let frame = Frame::none()
-                                .fill(Color32::from_rgb(30, 30, 45))
+                                .fill(Color32::from_rgb(13, 19, 33))
                                 .rounding(Rounding::same(8.0 * s))
                                 .inner_margin(10.0 * s);
 
@@ -1112,7 +1632,7 @@ fn draw_queue(ctx: &egui::Context, app: &mut ZalStudio) {
                                             ui.label(
                                                 egui::RichText::new(line)
                                                     .size(11.0 * s)
-                                                    .color(Color32::from_gray(150)),
+                                                    .color(Color32::from_rgb(130, 150, 170)),
                                             );
                                         });
                                         ui.with_layout(
@@ -1122,7 +1642,7 @@ fn draw_queue(ctx: &egui::Context, app: &mut ZalStudio) {
                                                     egui::Button::new(
                                                         egui::RichText::new("×")
                                                             .size(18.0 * s)
-                                                            .color(Color32::from_rgb(255, 80, 80)),
+                                                            .color(Color32::from_rgb(255, 51, 102)),
                                                     )
                                                     .frame(false),
                                                 );
@@ -1154,7 +1674,7 @@ fn draw_queue(ctx: &egui::Context, app: &mut ZalStudio) {
                             egui::RichText::new(format!("{}: {:.0} kr", pack.total_label, total))
                                 .size(18.0 * s)
                                 .strong()
-                                .color(Color32::from_rgb(80, 220, 120)),
+                                .color(Color32::from_rgb(0, 229, 255)),
                         );
                         ui.add_space(8.0 * s);
                     }
@@ -1168,7 +1688,7 @@ fn draw_queue(ctx: &egui::Context, app: &mut ZalStudio) {
                         .strong()
                         .color(Color32::WHITE),
                     )
-                    .fill(Color32::from_rgb(0, 140, 100))
+                    .fill(Color32::from_rgb(0, 229, 255))
                     .rounding(Rounding::same(10.0 * s))
                     .min_size(Vec2::new(btn_width, 52.0 * s));
                     if ui.add(pay_btn).clicked() {
@@ -1183,9 +1703,9 @@ fn draw_queue(ctx: &egui::Context, app: &mut ZalStudio) {
                             .strong()
                             .color(Color32::WHITE),
                     )
-                    .fill(Color32::from_rgb(0, 120, 180))
+                    .fill(Color32::from_rgb(0, 153, 170))
                     .rounding(Rounding::same(10.0 * s))
-                    .min_size(Vec2::new(btn_width, 44.0 * s));
+                    .min_size(Vec2::new(btn_width, 64.0 * s));
                     if ui.add(print_btn).clicked() {
                         app.print_queue(); // handles screen transition internally
                     }
@@ -1205,7 +1725,7 @@ fn draw_importing(ctx: &egui::Context, app: &mut ZalStudio) {
     egui::CentralPanel::default()
         .frame(
             Frame::none()
-                .fill(Color32::from_rgb(14, 14, 22))
+                .fill(Color32::from_rgb(10, 15, 26))
                 .inner_margin(20.0 * s),
         )
         .show(ctx, |ui| {
@@ -1216,7 +1736,7 @@ fn draw_importing(ctx: &egui::Context, app: &mut ZalStudio) {
                     ui.label(
                         egui::RichText::new(spinner)
                             .size(56.0 * s)
-                            .color(Color32::from_rgb(0, 150, 220)),
+                            .color(Color32::from_rgb(0, 229, 255)),
                     );
                     ui.add_space(20.0 * s);
                     ui.label(
@@ -1228,8 +1748,8 @@ fn draw_importing(ctx: &egui::Context, app: &mut ZalStudio) {
                     ui.add_space(10.0 * s);
                     ui.label(
                         egui::RichText::new(&app.import_status)
-                            .size(14.0 * s)
-                            .color(Color32::from_gray(160)),
+                            .size(18.0 * s)
+                            .color(Color32::from_rgb(142, 202, 230)),
                     );
                 });
             });
@@ -1245,7 +1765,7 @@ fn draw_mobile_menu(ctx: &egui::Context, app: &mut ZalStudio) {
     egui::CentralPanel::default()
         .frame(
             Frame::none()
-                .fill(Color32::from_rgb(14, 14, 22))
+                .fill(Color32::from_rgb(10, 15, 26))
                 .inner_margin(16.0 * s),
         )
         .show(ctx, |ui| {
@@ -1260,7 +1780,7 @@ fn draw_mobile_menu(ctx: &egui::Context, app: &mut ZalStudio) {
                 ui.label(
                     egui::RichText::new("🔌")
                         .size(40.0 * s)
-                        .color(Color32::from_rgb(0, 200, 255)),
+                        .color(Color32::from_rgb(0, 229, 255)),
                 );
                 ui.label(
                     egui::RichText::new("Anslut med kabel")
@@ -1271,7 +1791,7 @@ fn draw_mobile_menu(ctx: &egui::Context, app: &mut ZalStudio) {
                 ui.label(
                     egui::RichText::new("Om WiFi inte fungerar, koppla in telefonen med USB")
                         .size(12.0 * s)
-                        .color(Color32::from_gray(160)),
+                        .color(Color32::from_rgb(142, 202, 230)),
                 );
                 ui.add_space(24.0 * s);
 
@@ -1280,7 +1800,7 @@ fn draw_mobile_menu(ctx: &egui::Context, app: &mut ZalStudio) {
                 big_button(
                     ui,
                     pack.mobile_android,
-                    Color32::from_rgb(50, 180, 80),
+                    Color32::from_rgb(0, 255, 170),
                     btn_width,
                     s,
                     || {
@@ -1290,7 +1810,7 @@ fn draw_mobile_menu(ctx: &egui::Context, app: &mut ZalStudio) {
                 big_button(
                     ui,
                     pack.mobile_iphone,
-                    Color32::from_rgb(200, 60, 60),
+                    Color32::from_rgb(255, 51, 102),
                     btn_width,
                     s,
                     || {
@@ -1304,11 +1824,11 @@ fn draw_mobile_menu(ctx: &egui::Context, app: &mut ZalStudio) {
                 let back_btn = egui::Button::new(
                     egui::RichText::new(pack.wifi_qr_upload)
                         .size(13.0 * s)
-                        .color(Color32::from_gray(200)),
+                        .color(Color32::from_rgb(200, 220, 240)),
                 )
-                .fill(Color32::from_rgb(35, 35, 50))
+                .fill(Color32::from_rgb(13, 19, 33))
                 .rounding(Rounding::same(10.0 * s))
-                .min_size(Vec2::new(btn_width, 44.0 * s));
+                .min_size(Vec2::new(btn_width, 64.0 * s));
                 if ui.add(back_btn).clicked() {
                     app.open_mobile_upload();
                 }
@@ -1323,7 +1843,7 @@ fn draw_phone_connecting(ctx: &egui::Context, app: &mut ZalStudio) {
     let pack = l(app.lang);
     let s = touch_scale(ctx);
     egui::CentralPanel::default()
-        .frame(Frame::none().fill(Color32::from_rgb(14, 14, 22)).inner_margin(16.0 * s))
+        .frame(Frame::none().fill(Color32::from_rgb(10, 15, 26)).inner_margin(16.0 * s))
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
                 if nav_button(ui, "<", s).clicked() {
@@ -1340,7 +1860,7 @@ fn draw_phone_connecting(ctx: &egui::Context, app: &mut ZalStudio) {
                 ui.label(
                     egui::RichText::new("📱")
                         .size(48.0 * s)
-                        .color(Color32::from_rgb(0, 200, 255)),
+                        .color(Color32::from_rgb(0, 229, 255)),
                 );
                 ui.label(
                     egui::RichText::new(pack.connect_phone_title)
@@ -1357,13 +1877,13 @@ fn draw_phone_connecting(ctx: &egui::Context, app: &mut ZalStudio) {
                 ui.label(
                     egui::RichText::new(hint)
                         .size(14.0 * s)
-                        .color(Color32::from_gray(180)),
+                        .color(Color32::from_rgb(180, 200, 220)),
                 );
                 ui.add_space(8.0 * s);
                 ui.label(
                     egui::RichText::new(pack.connect_phone_hint)
                         .size(12.0 * s)
-                        .color(Color32::from_gray(140)),
+                        .color(Color32::from_rgb(120, 140, 160)),
                 );
 
                 ui.add_space(24.0 * s);
@@ -1374,7 +1894,7 @@ fn draw_phone_connecting(ctx: &egui::Context, app: &mut ZalStudio) {
                 ui.label(
                     egui::RichText::new(spinner)
                         .size(32.0 * s)
-                        .color(Color32::from_rgb(0, 200, 255)),
+                        .color(Color32::from_rgb(0, 229, 255)),
                 );
                 ui.add_space(8.0 * s);
 
@@ -1393,14 +1913,14 @@ fn draw_phone_connecting(ctx: &egui::Context, app: &mut ZalStudio) {
                     ui.label(
                         egui::RichText::new("Detta kan ta upp till en minut...")
                             .size(11.0 * s)
-                            .color(Color32::from_gray(140)),
+                            .color(Color32::from_rgb(120, 140, 160)),
                     );
                 } else {
                     ui.label(
                         egui::RichText::new(format!("{} ({}s)", pack.connect_phone_searching, elapsed))
                             .size(14.0 * s)
                             .strong()
-                            .color(Color32::from_rgb(0, 200, 255)),
+                            .color(Color32::from_rgb(0, 229, 255)),
                     );
                 }
 
@@ -1408,7 +1928,7 @@ fn draw_phone_connecting(ctx: &egui::Context, app: &mut ZalStudio) {
                 ui.label(
                     egui::RichText::new("Anslut telefonen och tryck Tillåt på skärmen. Se till att telefonen är i filöverföringsläge.")
                         .size(11.0 * s)
-                        .color(Color32::from_gray(120)),
+                        .color(Color32::from_rgb(180, 200, 220)),
                 );
 
                 ui.add_space(16.0 * s);
@@ -1420,9 +1940,9 @@ fn draw_phone_connecting(ctx: &egui::Context, app: &mut ZalStudio) {
                         .strong()
                         .color(Color32::WHITE),
                 )
-                .fill(Color32::from_rgb(0, 130, 190))
+                .fill(Color32::from_rgb(0, 229, 255))
                 .rounding(Rounding::same(10.0 * s))
-                .min_size(Vec2::new(btn_width, 44.0 * s));
+                .min_size(Vec2::new(btn_width, 64.0 * s));
                 if ui.add(search_btn).clicked() {
                     app.phone_poll_last = std::time::Instant::now();
                     app.phone_connect_start = Some(std::time::Instant::now());
@@ -1441,7 +1961,7 @@ fn draw_mobile_upload(ctx: &egui::Context, app: &mut ZalStudio) {
     egui::CentralPanel::default()
         .frame(
             Frame::none()
-                .fill(Color32::from_rgb(14, 14, 22))
+                .fill(Color32::from_rgb(10, 15, 26))
                 .inner_margin(16.0 * s),
         )
         .show(ctx, |ui| {
@@ -1467,13 +1987,14 @@ fn draw_mobile_upload(ctx: &egui::Context, app: &mut ZalStudio) {
                 ui.label(
                     egui::RichText::new(pack.mobile_upload_hint)
                         .size(12.0 * s)
-                        .color(Color32::from_gray(160)),
+                        .color(Color32::from_rgb(142, 202, 230)),
                 );
                 ui.add_space(8.0 * s);
 
                 // ── WiFi info box ─────────────────────────────────────────────
                 egui::Frame::none()
-                    .fill(Color32::from_rgb(25, 25, 40))
+                    .fill(Color32::from_rgb(17, 24, 39))
+                    .stroke(Stroke::new(1.0 * s, Color32::from_rgb(30, 40, 60)))
                     .rounding(Rounding::same(12.0 * s))
                     .inner_margin(10.0 * s)
                     .show(ui, |ui| {
@@ -1486,7 +2007,7 @@ fn draw_mobile_upload(ctx: &egui::Context, app: &mut ZalStudio) {
                                 ))
                                 .size(14.0 * s)
                                 .strong()
-                                .color(Color32::from_rgb(255, 220, 100)),
+                                .color(Color32::from_rgb(20, 30, 50)),
                             );
                         });
                     });
@@ -1501,7 +2022,7 @@ fn draw_mobile_upload(ctx: &egui::Context, app: &mut ZalStudio) {
                         "💡  If WiFi is not visible: Turn on Mobile Hotspot in Windows Settings"
                     })
                     .size(11.0 * s)
-                    .color(Color32::from_gray(140)),
+                    .color(Color32::from_rgb(120, 140, 160)),
                 );
 
                 ui.add_space(10.0 * s);
@@ -1523,7 +2044,7 @@ fn draw_mobile_upload(ctx: &egui::Context, app: &mut ZalStudio) {
                                 egui::RichText::new(pack.wifi_step_connect)
                                     .size(12.0 * s)
                                     .strong()
-                                    .color(Color32::from_rgb(0, 200, 255)),
+                                    .color(Color32::from_rgb(0, 229, 255)),
                             );
                             ui.add_space(4.0 * s);
                             if let Some(texture) = app.wifi_qr_texture(ctx) {
@@ -1532,7 +2053,7 @@ fn draw_mobile_upload(ctx: &egui::Context, app: &mut ZalStudio) {
                                 ui.label(
                                     egui::RichText::new("…")
                                         .size(12.0 * s)
-                                        .color(Color32::from_gray(120)),
+                                        .color(Color32::from_rgb(180, 200, 220)),
                                 );
                             }
                         });
@@ -1548,7 +2069,7 @@ fn draw_mobile_upload(ctx: &egui::Context, app: &mut ZalStudio) {
                                 egui::RichText::new(pack.wifi_step_upload)
                                     .size(12.0 * s)
                                     .strong()
-                                    .color(Color32::from_rgb(0, 200, 255)),
+                                    .color(Color32::from_rgb(0, 229, 255)),
                             );
                             ui.add_space(4.0 * s);
                             if let Some(texture) = app.qr_texture(ctx) {
@@ -1557,7 +2078,7 @@ fn draw_mobile_upload(ctx: &egui::Context, app: &mut ZalStudio) {
                                 ui.label(
                                     egui::RichText::new("…")
                                         .size(12.0 * s)
-                                        .color(Color32::from_gray(120)),
+                                        .color(Color32::from_rgb(180, 200, 220)),
                                 );
                             }
                         });
@@ -1569,7 +2090,7 @@ fn draw_mobile_upload(ctx: &egui::Context, app: &mut ZalStudio) {
                     ui.label(
                         egui::RichText::new(format!("{}: {}", pack.mobile_upload_url, url))
                             .size(10.0 * s)
-                            .color(Color32::from_gray(140)),
+                            .color(Color32::from_rgb(120, 140, 160)),
                     );
                 }
 
@@ -1582,9 +2103,9 @@ fn draw_mobile_upload(ctx: &egui::Context, app: &mut ZalStudio) {
                         .strong()
                         .color(Color32::WHITE),
                 )
-                .fill(Color32::from_rgb(0, 130, 190))
+                .fill(Color32::from_rgb(0, 229, 255))
                 .rounding(Rounding::same(10.0 * s))
-                .min_size(Vec2::new(btn_width, 44.0 * s));
+                .min_size(Vec2::new(btn_width, 64.0 * s));
                 if ui.add(refresh_btn).clicked() {
                     app.rescan();
                 }
@@ -1597,9 +2118,9 @@ fn draw_mobile_upload(ctx: &egui::Context, app: &mut ZalStudio) {
                         .strong()
                         .color(Color32::WHITE),
                 )
-                .fill(Color32::from_rgb(0, 140, 100))
+                .fill(Color32::from_rgb(0, 229, 255))
                 .rounding(Rounding::same(10.0 * s))
-                .min_size(Vec2::new(btn_width, 44.0 * s));
+                .min_size(Vec2::new(btn_width, 64.0 * s));
                 if ui.add(done_btn).clicked() {
                     app.screen = AppScreen::Gallery;
                 }
@@ -1610,7 +2131,7 @@ fn draw_mobile_upload(ctx: &egui::Context, app: &mut ZalStudio) {
                 let cable_btn = egui::Button::new(
                     egui::RichText::new(pack.mobile_cable_connect)
                         .size(11.0 * s)
-                        .color(Color32::from_gray(140)),
+                        .color(Color32::from_rgb(120, 140, 160)),
                 )
                 .fill(Color32::TRANSPARENT)
                 .stroke(Stroke::NONE)
@@ -1632,7 +2153,7 @@ fn draw_phone_folder_select(ctx: &egui::Context, app: &mut ZalStudio) {
     egui::CentralPanel::default()
         .frame(
             Frame::none()
-                .fill(Color32::from_rgb(14, 14, 22))
+                .fill(Color32::from_rgb(10, 15, 26))
                 .inner_margin(16.0 * s),
         )
         .show(ctx, |ui| {
@@ -1658,7 +2179,7 @@ fn draw_phone_folder_select(ctx: &egui::Context, app: &mut ZalStudio) {
             ui.label(
                 egui::RichText::new(pack.phone_folders_hint)
                     .size(12.0 * s)
-                    .color(Color32::from_gray(140)),
+                    .color(Color32::from_rgb(120, 140, 160)),
             );
             ui.add_space(12.0 * s);
 
@@ -1672,7 +2193,7 @@ fn draw_phone_folder_select(ctx: &egui::Context, app: &mut ZalStudio) {
                 ui.label(
                     egui::RichText::new("Inga bildmappar hittades i DCIM")
                         .size(13.0 * s)
-                        .color(Color32::from_gray(120)),
+                        .color(Color32::from_rgb(180, 200, 220)),
                 );
             } else {
                 egui::ScrollArea::vertical()
@@ -1688,7 +2209,7 @@ fn draw_phone_folder_select(ctx: &egui::Context, app: &mut ZalStudio) {
                                 .strong()
                                 .color(Color32::WHITE),
                             )
-                            .fill(Color32::from_rgb(35, 35, 55))
+                            .fill(Color32::from_rgb(13, 19, 33))
                             .rounding(Rounding::same(10.0 * s))
                             .min_size(Vec2::new(ui.available_width(), 52.0 * s));
 
@@ -1715,7 +2236,7 @@ fn draw_google_drive_auth(ctx: &egui::Context, app: &mut ZalStudio) {
     egui::CentralPanel::default()
         .frame(
             Frame::none()
-                .fill(Color32::from_rgb(14, 14, 22))
+                .fill(Color32::from_rgb(10, 15, 26))
                 .inner_margin(16.0 * s),
         )
         .show(ctx, |ui| {
@@ -1732,7 +2253,7 @@ fn draw_google_drive_auth(ctx: &egui::Context, app: &mut ZalStudio) {
                 ui.label(
                     egui::RichText::new("📸")
                         .size(36.0 * s)
-                        .color(Color32::from_rgb(234, 67, 53)),
+                        .color(Color32::from_rgb(255, 51, 102)),
                 );
                 ui.label(
                     egui::RichText::new(pack.google_drive_title)
@@ -1744,7 +2265,7 @@ fn draw_google_drive_auth(ctx: &egui::Context, app: &mut ZalStudio) {
                 ui.label(
                     egui::RichText::new(pack.google_drive_auth_hint)
                         .size(12.0 * s)
-                        .color(Color32::from_gray(160)),
+                        .color(Color32::from_rgb(142, 202, 230)),
                 );
                 ui.add_space(20.0 * s);
 
@@ -1752,19 +2273,19 @@ fn draw_google_drive_auth(ctx: &egui::Context, app: &mut ZalStudio) {
                     ui.label(
                         egui::RichText::new("🌐 En webbläsare har öppnats")
                             .size(16.0 * s)
-                            .color(Color32::from_rgb(0, 200, 255)),
+                            .color(Color32::from_rgb(0, 229, 255)),
                     );
                     ui.add_space(8.0 * s);
                     ui.label(
                         egui::RichText::new("Logga in på Google i webbläsaren och godkänn åtkomst")
                             .size(14.0 * s)
-                            .color(Color32::from_gray(180)),
+                            .color(Color32::from_rgb(180, 200, 220)),
                     );
                     ui.add_space(8.0 * s);
                     ui.label(
                         egui::RichText::new("(Stäng webbläsaren när du är klar)")
                             .size(12.0 * s)
-                            .color(Color32::from_gray(120)),
+                            .color(Color32::from_rgb(180, 200, 220)),
                     );
                     ui.add_space(16.0 * s);
 
@@ -1776,9 +2297,9 @@ fn draw_google_drive_auth(ctx: &egui::Context, app: &mut ZalStudio) {
                                     .size(14.0 * s)
                                     .color(Color32::WHITE),
                             )
-                            .fill(Color32::from_rgb(40, 40, 60))
+                            .fill(Color32::from_rgb(13, 19, 33))
                             .rounding(Rounding::same(8.0 * s))
-                            .min_size(Vec2::new(220.0 * s, 44.0 * s)),
+                            .min_size(Vec2::new(220.0 * s, 64.0 * s)),
                         )
                         .clicked()
                     {
@@ -1814,7 +2335,7 @@ fn draw_google_drive_auth(ctx: &egui::Context, app: &mut ZalStudio) {
                     ui.label(
                         egui::RichText::new(&app.drive_status)
                             .size(13.0 * s)
-                            .color(Color32::from_rgb(255, 60, 60)),
+                            .color(Color32::from_rgb(255, 51, 102)),
                     );
                 }
             });
@@ -1830,7 +2351,7 @@ fn draw_google_drive_picker(ctx: &egui::Context, app: &mut ZalStudio) {
     egui::CentralPanel::default()
         .frame(
             Frame::none()
-                .fill(Color32::from_rgb(14, 14, 22))
+                .fill(Color32::from_rgb(10, 15, 26))
                 .inner_margin(12.0 * s),
         )
         .show(ctx, |ui| {
@@ -1854,7 +2375,7 @@ fn draw_google_drive_picker(ctx: &egui::Context, app: &mut ZalStudio) {
                     ui.label(
                         egui::RichText::new("Inga bilder i Drive")
                             .size(13.0 * s)
-                            .color(Color32::from_gray(140)),
+                            .color(Color32::from_rgb(120, 140, 160)),
                     );
                 });
             } else {
@@ -1898,9 +2419,9 @@ fn draw_google_drive_picker(ctx: &egui::Context, app: &mut ZalStudio) {
                                         app.drive_selected.get(idx).copied().unwrap_or(false);
 
                                     let bg = if is_selected {
-                                        Color32::from_rgb(0, 150, 220)
+                                        Color32::from_rgb(0, 229, 255)
                                     } else {
-                                        Color32::from_rgb(30, 30, 45)
+                                        Color32::from_rgb(13, 19, 33)
                                     };
 
                                     let frame = Frame::none()
@@ -1945,12 +2466,14 @@ fn draw_google_drive_picker(ctx: &egui::Context, app: &mut ZalStudio) {
                                                 ui.label(
                                                     egui::RichText::new(name)
                                                         .size(10.0 * s)
-                                                        .color(Color32::from_gray(200)),
+                                                        .color(Color32::from_rgb(200, 220, 240)),
                                                 );
 
                                                 // Checkmark if selected
                                                 if is_selected {
-                                                    ui.label(egui::RichText::new("✅").size(14.0 * s));
+                                                    ui.label(
+                                                        egui::RichText::new("✅").size(14.0 * s),
+                                                    );
                                                 }
                                             });
                                         })
@@ -1988,9 +2511,9 @@ fn draw_google_drive_picker(ctx: &egui::Context, app: &mut ZalStudio) {
                         .strong()
                         .color(Color32::WHITE),
                     )
-                    .fill(Color32::from_rgb(66, 133, 244))
+                    .fill(Color32::from_rgb(0, 229, 255))
                     .rounding(Rounding::same(10.0 * s))
-                    .min_size(Vec2::new(btn_width, 48.0 * s));
+                    .min_size(Vec2::new(btn_width, 64.0 * s));
 
                     if ui.add(download_btn).clicked() && selected_count > 0 {
                         app.download_selected_drive_files();
@@ -2009,7 +2532,7 @@ fn draw_google_photos_picker(ctx: &egui::Context, app: &mut ZalStudio) {
     egui::CentralPanel::default()
         .frame(
             Frame::none()
-                .fill(Color32::from_rgb(14, 14, 22))
+                .fill(Color32::from_rgb(10, 15, 26))
                 .inner_margin(12.0 * s),
         )
         .show(ctx, |ui| {
@@ -2027,11 +2550,11 @@ fn draw_google_photos_picker(ctx: &egui::Context, app: &mut ZalStudio) {
                     egui::RichText::new(pack.tab_drive)
                         .size(14.0 * s)
                         .strong()
-                        .color(Color32::from_gray(200)),
+                        .color(Color32::from_rgb(200, 220, 240)),
                 )
-                .fill(Color32::from_rgb(30, 30, 45))
+                .fill(Color32::from_rgb(13, 19, 33))
                 .rounding(Rounding::same(8.0 * s))
-                .min_size(Vec2::new(ui.available_width() * 0.45, 36.0 * s));
+                .min_size(Vec2::new(ui.available_width() * 0.45, 56.0 * s));
                 if ui.add(drive_btn).clicked() {
                     app.screen = AppScreen::GoogleDrivePicker;
                 }
@@ -2044,9 +2567,9 @@ fn draw_google_photos_picker(ctx: &egui::Context, app: &mut ZalStudio) {
                         .strong()
                         .color(Color32::WHITE),
                 )
-                .fill(Color32::from_rgb(200, 60, 120))
+                .fill(Color32::from_rgb(255, 51, 102))
                 .rounding(Rounding::same(8.0 * s))
-                .min_size(Vec2::new(ui.available_width(), 36.0 * s));
+                .min_size(Vec2::new(ui.available_width(), 56.0 * s));
                 ui.add(photos_btn);
             });
 
@@ -2057,7 +2580,7 @@ fn draw_google_photos_picker(ctx: &egui::Context, app: &mut ZalStudio) {
                     ui.label(
                         egui::RichText::new("Inga bilder i Google Foto")
                             .size(13.0 * s)
-                            .color(Color32::from_gray(140)),
+                            .color(Color32::from_rgb(120, 140, 160)),
                     );
                 });
             } else {
@@ -2069,9 +2592,9 @@ fn draw_google_photos_picker(ctx: &egui::Context, app: &mut ZalStudio) {
                                 app.photo_selected.get(i).copied().unwrap_or(false);
 
                             let bg = if is_selected {
-                                Color32::from_rgb(200, 60, 120)
+                                Color32::from_rgb(255, 51, 102)
                             } else {
-                                Color32::from_rgb(30, 30, 45)
+                                Color32::from_rgb(13, 19, 33)
                             };
 
                             let frame = Frame::none()
@@ -2120,9 +2643,9 @@ fn draw_google_photos_picker(ctx: &egui::Context, app: &mut ZalStudio) {
                         .strong()
                         .color(Color32::WHITE),
                     )
-                    .fill(Color32::from_rgb(200, 60, 120))
+                    .fill(Color32::from_rgb(255, 51, 102))
                     .rounding(Rounding::same(10.0 * s))
-                    .min_size(Vec2::new(btn_width, 48.0 * s));
+                    .min_size(Vec2::new(btn_width, 64.0 * s));
 
                     if ui.add(download_btn).clicked() && selected_count > 0 {
                         app.download_selected_google_photos();
@@ -2151,11 +2674,11 @@ fn draw_toast(ctx: &egui::Context, app: &mut ZalStudio) {
             .fixed_pos(pos)
             .show(ctx, |ui| {
                 let frame = Frame::none()
-                    .fill(Color32::from_rgba_unmultiplied(30, 30, 45, alpha))
+                    .fill(Color32::from_rgba_unmultiplied(10, 15, 26, alpha))
                     .rounding(Rounding::same(10.0 * s))
                     .stroke(Stroke::new(
                         1.0,
-                        Color32::from_rgba_unmultiplied(60, 60, 90, alpha),
+                        Color32::from_rgba_unmultiplied(0, 229, 255, alpha),
                     ))
                     .inner_margin(14.0 * s);
 
@@ -2167,7 +2690,7 @@ fn draw_toast(ctx: &egui::Context, app: &mut ZalStudio) {
                             egui::RichText::new(msg)
                                 .size(14.0 * s)
                                 .strong()
-                                .color(Color32::from_rgb(0, 220, 255)),
+                                .color(Color32::from_rgb(0, 229, 255)),
                         );
                     });
                 });
@@ -2181,32 +2704,31 @@ fn draw_toast(ctx: &egui::Context, app: &mut ZalStudio) {
 fn draw_print_done(ctx: &egui::Context, app: &mut ZalStudio) {
     let pack = l(app.lang);
     let s = touch_scale(ctx);
+    let bg_main = Color32::from_rgb(10, 15, 26);
+    let text_dark = Color32::from_rgb(224, 247, 255);
+    let blue_accent = Color32::from_rgb(0, 229, 255);
+
     egui::CentralPanel::default()
-        .frame(
-            Frame::none()
-                .fill(Color32::from_rgb(14, 14, 22))
-                .inner_margin(20.0 * s),
-        )
+        .frame(Frame::none().fill(bg_main).inner_margin(20.0 * s))
         .show(ctx, |ui| {
+            let rect = ui.max_rect();
+            ui.painter().rect_filled(rect, 0.0, bg_main);
+
             ui.centered_and_justified(|ui| {
                 ui.vertical_centered(|ui| {
-                    ui.label(
-                        egui::RichText::new("🖨")
-                            .size(64.0 * s)
-                            .color(Color32::from_rgb(0, 200, 255)),
-                    );
+                    ui.label(egui::RichText::new("🖨").size(64.0 * s).color(blue_accent));
                     ui.add_space(20.0 * s);
                     ui.label(
                         egui::RichText::new(pack.print_done_title)
                             .size(26.0 * s)
                             .strong()
-                            .color(Color32::WHITE),
+                            .color(text_dark),
                     );
                     ui.add_space(12.0 * s);
                     ui.label(
                         egui::RichText::new(pack.print_done_subtitle)
                             .size(14.0 * s)
-                            .color(Color32::from_gray(160)),
+                            .color(Color32::from_rgb(40, 50, 70)),
                     );
                     ui.add_space(40.0 * s);
 
@@ -2215,13 +2737,143 @@ fn draw_print_done(ctx: &egui::Context, app: &mut ZalStudio) {
                     ui.label(
                         egui::RichText::new(spinner)
                             .size(32.0 * s)
-                            .color(Color32::from_rgb(0, 200, 255)),
+                            .color(blue_accent),
                     );
                     ui.add_space(8.0 * s);
                     ui.label(
                         egui::RichText::new(format!("{:.0}s", app.print_done_timer))
                             .size(12.0 * s)
-                            .color(Color32::from_gray(120)),
+                            .color(Color32::from_rgb(40, 50, 70)),
+                    );
+                });
+            });
+        });
+}
+
+fn draw_print_progress(ctx: &egui::Context, app: &mut ZalStudio) {
+    let pack = l(app.lang);
+    let s = touch_scale(ctx);
+    let bg_main = Color32::from_rgb(10, 15, 26);
+    let text_dark = Color32::from_rgb(224, 247, 255);
+    let text_mid = Color32::from_rgb(142, 202, 230);
+    let blue_accent = Color32::from_rgb(0, 229, 255);
+    let green_ok = Color32::from_rgb(0, 255, 170);
+    let red_err = Color32::from_rgb(255, 51, 102);
+
+    let total = app.print_progress_total.max(1);
+    let done = app.print_progress_done;
+    let failed = app.print_progress_failed;
+    let progress = (done + failed) as f32 / total as f32;
+
+    egui::CentralPanel::default()
+        .frame(Frame::none().fill(bg_main).inner_margin(24.0 * s))
+        .show(ctx, |ui| {
+            let rect = ui.max_rect();
+            ui.painter().rect_filled(rect, 0.0, bg_main);
+
+            ui.centered_and_justified(|ui| {
+                ui.vertical_centered(|ui| {
+                    ui.label(egui::RichText::new("🖨").size(56.0 * s).color(blue_accent));
+                    ui.add_space(16.0 * s);
+                    ui.label(
+                        egui::RichText::new(pack.print_progress_title)
+                            .size(28.0 * s)
+                            .strong()
+                            .color(text_dark),
+                    );
+                    ui.add_space(8.0 * s);
+                    ui.label(
+                        egui::RichText::new(pack.print_progress_subtitle)
+                            .size(16.0 * s)
+                            .color(text_mid),
+                    );
+
+                    ui.add_space(32.0 * s);
+
+                    // Progress bar
+                    let bar_width = ui.available_width().min(400.0 * s);
+                    let bar_height = 24.0 * s;
+                    let bar_rect = egui::Rect::from_center_size(
+                        ui.cursor().center_top() + egui::vec2(0.0, bar_height / 2.0),
+                        egui::vec2(bar_width, bar_height),
+                    );
+                    ui.painter().rect_filled(bar_rect, 8.0 * s, Color32::from_rgb(30, 40, 60));
+                    let fill_rect = egui::Rect::from_min_size(
+                        bar_rect.min,
+                        egui::vec2(bar_width * progress, bar_height),
+                    );
+                    ui.painter().rect_filled(fill_rect, 8.0 * s, blue_accent);
+                    ui.painter().rect_stroke(bar_rect, 8.0 * s, Stroke::new(1.0 * s, Color32::from_rgb(50, 60, 80)));
+                    ui.add_space(bar_height + 12.0 * s);
+
+                    ui.label(
+                        egui::RichText::new(format!("{} / {}", done + failed, total))
+                            .size(22.0 * s)
+                            .strong()
+                            .color(text_dark),
+                    );
+
+                    ui.add_space(24.0 * s);
+
+                    // Job status list
+                    for printer in &app.printers {
+                        for job in printer.jobs() {
+                            let (icon, color, status_text) = match &job.status {
+                                crate::printer::JobStatus::Queued => ("⏳", text_mid, pack.print_progress_queued),
+                                crate::printer::JobStatus::Printing => ("🖨", blue_accent, pack.print_progress_printing),
+                                crate::printer::JobStatus::Done => ("✅", green_ok, pack.print_progress_done),
+                                crate::printer::JobStatus::Failed(_) => ("❌", red_err, pack.print_progress_failed),
+                            };
+                            let file = std::path::Path::new(&job.photo_path)
+                                .file_name()
+                                .unwrap_or_default()
+                                .to_string_lossy();
+                            ui.label(
+                                egui::RichText::new(format!("{}  {} — {}", icon, file, status_text))
+                                    .size(14.0 * s)
+                                    .color(color),
+                            );
+                        }
+                    }
+                });
+            });
+        });
+}
+
+fn draw_thank_you(ctx: &egui::Context, app: &mut ZalStudio) {
+    let pack = l(app.lang);
+    let s = touch_scale(ctx);
+    let bg_main = Color32::from_rgb(10, 15, 26);
+    let text_dark = Color32::from_rgb(224, 247, 255);
+    let blue_accent = Color32::from_rgb(0, 229, 255);
+
+    egui::CentralPanel::default()
+        .frame(Frame::none().fill(bg_main).inner_margin(24.0 * s))
+        .show(ctx, |ui| {
+            let rect = ui.max_rect();
+            ui.painter().rect_filled(rect, 0.0, bg_main);
+
+            ui.centered_and_justified(|ui| {
+                ui.vertical_centered(|ui| {
+                    ui.label(egui::RichText::new("👋").size(72.0 * s).color(blue_accent));
+                    ui.add_space(24.0 * s);
+                    ui.label(
+                        egui::RichText::new(pack.thank_you_title)
+                            .size(36.0 * s)
+                            .strong()
+                            .color(text_dark),
+                    );
+                    ui.add_space(12.0 * s);
+                    ui.label(
+                        egui::RichText::new(pack.thank_you_subtitle)
+                            .size(18.0 * s)
+                            .color(Color32::from_rgb(142, 202, 230)),
+                    );
+                    ui.add_space(32.0 * s);
+                    ui.label(
+                        egui::RichText::new(format!("{:.0}s", app.thank_you_timer))
+                            .size(14.0 * s)
+                            .color(Color32::from_rgb(60, 80, 110)),
                     );
                 });
             });
@@ -2237,13 +2889,15 @@ fn draw_payment(ctx: &egui::Context, app: &mut ZalStudio) {
     let total = app.queue_total_price();
     let count = app.queue.len();
 
+    let bg_main = Color32::from_rgb(10, 15, 26);
+    let text_dark = Color32::from_rgb(224, 247, 255);
+
     egui::CentralPanel::default()
-        .frame(
-            Frame::none()
-                .fill(Color32::from_rgb(14, 14, 22))
-                .inner_margin(20.0 * s),
-        )
+        .frame(Frame::none().fill(bg_main).inner_margin(20.0 * s))
         .show(ctx, |ui| {
+            let rect = ui.max_rect();
+            ui.painter().rect_filled(rect, 0.0, bg_main);
+
             ui.vertical_centered(|ui| {
                 ui.add_space(24.0 * s);
                 ui.label(egui::RichText::new("💳").size(56.0 * s));
@@ -2252,20 +2906,20 @@ fn draw_payment(ctx: &egui::Context, app: &mut ZalStudio) {
                     egui::RichText::new(pack.payment_title)
                         .size(26.0 * s)
                         .strong()
-                        .color(Color32::WHITE),
+                        .color(text_dark),
                 );
                 ui.add_space(8.0 * s);
                 ui.label(
                     egui::RichText::new(format!("{}: {:.0} kr", pack.total_label, total))
                         .size(22.0 * s)
                         .strong()
-                        .color(Color32::from_rgb(80, 220, 120)),
+                        .color(Color32::from_rgb(0, 255, 170)),
                 );
                 ui.add_space(4.0 * s);
                 ui.label(
                     egui::RichText::new(format!("{}: {}", pack.print_queue, count))
                         .size(14.0 * s)
-                        .color(Color32::from_gray(160)),
+                        .color(Color32::from_rgb(100, 160, 220)),
                 );
 
                 ui.add_space(32.0 * s);
@@ -2276,17 +2930,16 @@ fn draw_payment(ctx: &egui::Context, app: &mut ZalStudio) {
                     .add_sized(
                         Vec2::new(btn_width, 56.0 * s),
                         egui::Button::new(
-                            egui::RichText::new(pack.payment_card)
+                            egui::RichText::new(pack.payment_store)
                                 .size(18.0 * s)
                                 .strong()
                                 .color(Color32::WHITE),
                         )
-                        .fill(Color32::from_rgb(0, 140, 100))
+                        .fill(Color32::from_rgb(0, 229, 255))
                         .rounding(Rounding::same(10.0 * s)),
                     )
                     .clicked()
                 {
-                    // TODO: integrate card terminal
                     app.print_queue();
                 }
 
@@ -2301,7 +2954,7 @@ fn draw_payment(ctx: &egui::Context, app: &mut ZalStudio) {
                                 .strong()
                                 .color(Color32::WHITE),
                         )
-                        .fill(Color32::from_rgb(70, 50, 170))
+                        .fill(Color32::from_rgb(100, 60, 220))
                         .rounding(Rounding::same(10.0 * s)),
                     )
                     .clicked()
@@ -2346,7 +2999,7 @@ fn draw_wired_phone_picker(ctx: &egui::Context, app: &mut ZalStudio) {
     egui::CentralPanel::default()
         .frame(
             Frame::none()
-                .fill(Color32::from_rgb(14, 14, 22))
+                .fill(Color32::from_rgb(10, 15, 26))
                 .inner_margin(16.0 * s),
         )
         .show(ctx, |ui| {
@@ -2363,7 +3016,7 @@ fn draw_wired_phone_picker(ctx: &egui::Context, app: &mut ZalStudio) {
                                 .strong()
                                 .color(Color32::WHITE),
                         )
-                        .fill(Color32::from_rgb(40, 40, 58))
+                        .fill(Color32::from_rgb(50, 60, 80))
                         .rounding(Rounding::same(12.0 * s))
                         .min_size(Vec2::new(140.0 * s, 52.0 * s));
                         if ui.add(back_btn).clicked() {
@@ -2404,7 +3057,7 @@ fn draw_wired_phone_picker(ctx: &egui::Context, app: &mut ZalStudio) {
                                     .strong()
                                     .color(Color32::WHITE),
                                 )
-                                .fill(Color32::from_rgb(0, 140, 100))
+                                .fill(Color32::from_rgb(0, 229, 255))
                                 .rounding(Rounding::same(12.0 * s))
                                 .min_size(Vec2::new(180.0 * s, 52.0 * s));
                                 if ui.add(import_btn).clicked() {
@@ -2422,7 +3075,7 @@ fn draw_wired_phone_picker(ctx: &egui::Context, app: &mut ZalStudio) {
                 ui.label(
                     egui::RichText::new("Inga bilder hittades")
                         .size(14.0 * s)
-                        .color(Color32::from_gray(140)),
+                        .color(Color32::from_rgb(120, 140, 160)),
                 );
             } else {
                 // Thumbnail grid using horizontal_wrapped
@@ -2473,9 +3126,9 @@ fn draw_wired_phone_picker(ctx: &egui::Context, app: &mut ZalStudio) {
 
                                 // Background
                                 let bg = if is_selected {
-                                    Color32::from_rgb(40, 60, 50)
+                                    Color32::from_rgb(0, 229, 255)
                                 } else {
-                                    Color32::from_rgb(35, 35, 48)
+                                    Color32::from_rgb(17, 24, 39)
                                 };
                                 painter.rect_filled(cell_rect, 8.0 * s, bg);
 
@@ -2495,12 +3148,12 @@ fn draw_wired_phone_picker(ctx: &egui::Context, app: &mut ZalStudio) {
                                     painter.rect_filled(
                                         inner,
                                         6.0 * s,
-                                        Color32::from_rgb(50, 50, 65),
+                                        Color32::from_rgb(30, 40, 60),
                                     );
                                     let galley = painter.layout(
                                         "🖼".to_string(),
                                         egui::FontId::new(36.0 * s, egui::FontFamily::Proportional),
-                                        Color32::from_gray(100),
+                                        Color32::from_rgb(180, 200, 220),
                                         f32::INFINITY,
                                     );
                                     let text_pos = inner.center() - galley.rect.size() * 0.5;
@@ -2512,7 +3165,7 @@ fn draw_wired_phone_picker(ctx: &egui::Context, app: &mut ZalStudio) {
                                     painter.rect_stroke(
                                         cell_rect,
                                         8.0 * s,
-                                        Stroke::new(3.5 * s, Color32::from_rgb(80, 220, 120)),
+                                        Stroke::new(3.5 * s, Color32::from_rgb(0, 229, 255)),
                                     );
 
                                     // Checkmark badge in upper-right
@@ -2524,7 +3177,7 @@ fn draw_wired_phone_picker(ctx: &egui::Context, app: &mut ZalStudio) {
                                     painter.circle_filled(
                                         badge_center,
                                         badge_r,
-                                        Color32::from_rgb(80, 220, 120),
+                                        Color32::from_rgb(0, 229, 255),
                                     );
                                     let check_galley = painter.layout(
                                         "✓".to_string(),
@@ -2550,11 +3203,11 @@ fn draw_wired_phone_picker(ctx: &egui::Context, app: &mut ZalStudio) {
                             pack.select_all
                         })
                         .size(15.0 * s)
-                        .color(Color32::from_gray(200)),
+                        .color(Color32::from_rgb(200, 220, 240)),
                     )
-                    .fill(Color32::from_rgb(40, 40, 55))
+                    .fill(Color32::from_rgb(17, 24, 39))
                     .rounding(Rounding::same(10.0 * s))
-                    .min_size(Vec2::new(btn_width, 48.0 * s));
+                    .min_size(Vec2::new(btn_width, 64.0 * s));
                     if ui.add(toggle_btn).clicked() {
                         let new_val = !all_selected;
                         if is_linux_mtp || is_windows_wpd {
@@ -2568,6 +3221,832 @@ fn draw_wired_phone_picker(ctx: &egui::Context, app: &mut ZalStudio) {
                         }
                     }
                 });
+            }
+        });
+}
+
+// =============================================================================
+// LAYOUT SELECT SCREEN
+// =============================================================================
+fn draw_layout_select(ctx: &egui::Context, app: &mut ZalStudio) {
+    let pack = l(app.lang);
+    let s = touch_scale(ctx);
+
+    egui::CentralPanel::default()
+        .frame(Frame::none().inner_margin(24.0 * s))
+        .show(ctx, |ui| {
+            // Soft solid background
+            let rect = ui.max_rect();
+            ui.painter()
+                .rect_filled(rect, 0.0, Color32::from_rgb(10, 15, 26));
+
+            // Top bar
+            ui.horizontal(|ui| {
+                if nav_button(ui, "<", s).clicked() {
+                    app.screen = AppScreen::SourceSelect;
+                }
+                ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
+                    ui.label(
+                        egui::RichText::new(pack.layout_select_title)
+                            .size(22.0 * s)
+                            .strong()
+                            .color(Color32::from_rgb(30, 40, 60)),
+                    );
+                });
+            });
+
+            ui.add_space(20.0 * s);
+
+            let layouts = crate::collage::all_layouts();
+            let card_width = (ui.available_width() / 2.0 - 16.0 * s).max(200.0 * s);
+            let card_height = 180.0 * s;
+
+            ui.vertical_centered(|ui| {
+                for layout in layouts {
+                    let rects = layout.slot_rects();
+                    let card = Frame::none()
+                        .fill(Color32::from_rgb(17, 24, 39))
+                        .rounding(Rounding::same(10.0 * s))
+                        .inner_margin(12.0 * s)
+                        .stroke(Stroke::new(1.0 * s, Color32::from_rgb(30, 40, 60)));
+
+                    let response = card
+                        .show(ui, |ui| {
+                            ui.set_width(card_width);
+                            ui.set_min_height(card_height);
+                            ui.horizontal(|ui| {
+                                // Preview canvas
+                                let preview_size = 120.0 * s;
+                                let preview_rect =
+                                    ui.allocate_space(Vec2::new(preview_size, preview_size)).1;
+                                ui.painter().rect_filled(
+                                    preview_rect,
+                                    Rounding::same(6.0 * s),
+                                    Color32::from_rgb(17, 24, 39),
+                                );
+                                for (nx, ny, nw, nh) in rects.iter().copied() {
+                                    let slot_rect = egui::Rect::from_min_size(
+                                        egui::pos2(
+                                            preview_rect.left() + nx * preview_size,
+                                            preview_rect.top() + ny * preview_size,
+                                        ),
+                                        Vec2::new(nw * preview_size, nh * preview_size),
+                                    );
+                                    // inset slightly for visual separation
+                                    let inset = 2.0 * s;
+                                    let slot_rect = slot_rect.shrink(inset);
+                                    ui.painter().rect_filled(
+                                        slot_rect,
+                                        Rounding::same(3.0 * s),
+                                        Color32::from_rgb(30, 40, 60),
+                                    );
+                                }
+
+                                ui.add_space(16.0 * s);
+
+                                ui.vertical(|ui| {
+                                    ui.label(
+                                        egui::RichText::new(layout.name())
+                                            .size(16.0 * s)
+                                            .strong()
+                                            .color(Color32::from_rgb(220, 240, 255)),
+                                    );
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "{} {} {}",
+                                            pack.select_photos_hint,
+                                            layout.photo_count(),
+                                            pack.selected_count
+                                        ))
+                                        .size(12.0 * s)
+                                        .color(Color32::from_rgb(80, 90, 110)),
+                                    );
+                                });
+                            });
+                        })
+                        .response;
+
+                    if response.clicked() {
+                        app.selected_layout = Some(layout);
+                        app.collage_photo_indices.clear();
+                        app.screen = AppScreen::CollageEditor;
+                    }
+                    ui.add_space(12.0 * s);
+                }
+            });
+        });
+}
+
+// =============================================================================
+// COLLAGE EDITOR SCREEN
+// =============================================================================
+fn draw_collage_editor(ctx: &egui::Context, app: &mut ZalStudio) {
+    let pack = l(app.lang);
+    let s = touch_scale(ctx);
+
+    let layout = match app.selected_layout {
+        Some(l) => l,
+        None => {
+            app.screen = AppScreen::LayoutSelect;
+            return;
+        }
+    };
+    let required = layout.photo_count();
+
+    egui::CentralPanel::default()
+        .frame(Frame::none().inner_margin(12.0 * s))
+        .show(ctx, |ui| {
+            // Soft solid background
+            let rect = ui.max_rect();
+            ui.painter()
+                .rect_filled(rect, 0.0, Color32::from_rgb(10, 15, 26));
+
+            // Top bar
+            ui.horizontal(|ui| {
+                if nav_button(ui, "<", s).clicked() {
+                    app.screen = AppScreen::LayoutSelect;
+                }
+                ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
+                    ui.label(
+                        egui::RichText::new(pack.collage_editor_title)
+                            .size(20.0 * s)
+                            .strong()
+                            .color(Color32::from_rgb(30, 40, 60)),
+                    );
+                });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let selected = app.collage_photo_indices.len();
+                    let count_text = format!("{} / {}", selected, required);
+                    ui.label(
+                        egui::RichText::new(count_text)
+                            .size(14.0 * s)
+                            .strong()
+                            .color(Color32::from_rgb(0, 229, 255)),
+                    );
+                });
+            });
+
+            ui.add_space(8.0 * s);
+
+            if app.photos.is_empty() {
+                ui.centered_and_justified(|ui| {
+                    ui.label(
+                        egui::RichText::new(pack.no_photos)
+                            .size(16.0 * s)
+                            .color(Color32::from_rgb(80, 90, 110)),
+                    );
+                });
+                return;
+            }
+
+            // Grid layout (same math as Gallery)
+            let available_width = ui.available_width();
+            let thumb_base = 130.0;
+            let spacing = 12.0;
+            let cell_size = thumb_base * s + spacing * s;
+            let cols = ((available_width / cell_size).floor() as usize).max(3);
+            let thumb_size = thumb_base * s;
+            let photo_count = app.photos.len();
+
+            egui::ScrollArea::vertical()
+                .auto_shrink([false; 2])
+                .show(ui, |ui| {
+                    for row_start in (0..photo_count).step_by(cols) {
+                        ui.horizontal(|ui| {
+                            for i in row_start..(row_start + cols).min(photo_count) {
+                                let photo_path = app.photos[i].path.clone();
+                                let photo_file_name = app.photos[i].file_name.clone();
+                                let photo_date = app.photos[i].date_taken;
+                                let is_selected = app.collage_photo_indices.contains(&i);
+
+                                let bg = if is_selected {
+                                    Color32::from_rgb(0, 229, 255)
+                                } else {
+                                    Color32::from_rgb(17, 24, 39)
+                                };
+
+                                let stroke_color = if is_selected {
+                                    Color32::from_rgb(0, 255, 170)
+                                } else {
+                                    Color32::from_rgb(80, 90, 110)
+                                };
+
+                                let frame = Frame::none()
+                                    .fill(bg)
+                                    .rounding(Rounding::same(8.0 * s))
+                                    .inner_margin(6.0 * s)
+                                    .stroke(Stroke::new(1.5 * s, stroke_color));
+
+                                let response = frame
+                                    .show(ui, |ui| {
+                                        ui.set_width(thumb_size);
+                                        ui.vertical_centered(|ui| {
+                                            if let Some(texture) = app.texture_for(ctx, &photo_path)
+                                            {
+                                                let tex_size = texture.size_vec2();
+                                                let aspect = tex_size.x / tex_size.y;
+                                                let (tw, th) = if aspect > 1.0 {
+                                                    (thumb_size, thumb_size / aspect)
+                                                } else {
+                                                    (thumb_size * aspect, thumb_size)
+                                                };
+                                                ui.add(
+                                                    egui::Image::new((
+                                                        texture.id(),
+                                                        Vec2::new(tw, th),
+                                                    ))
+                                                    .rounding(Rounding::same(4.0 * s)),
+                                                );
+                                            } else {
+                                                ui.add_space(thumb_size);
+                                            }
+
+                                            ui.label(
+                                                egui::RichText::new(&photo_file_name)
+                                                    .size(10.0 * s)
+                                                    .strong()
+                                                    .color(if is_selected {
+                                                        Color32::WHITE
+                                                    } else {
+                                                        Color32::from_rgb(40, 50, 65)
+                                                    }),
+                                            );
+                                            ui.label(
+                                                egui::RichText::new(
+                                                    crate::gallery::format_date_short(photo_date),
+                                                )
+                                                .size(9.0 * s)
+                                                .color(if is_selected {
+                                                    Color32::from_rgb(17, 24, 39)
+                                                } else {
+                                                    Color32::from_rgb(80, 90, 110)
+                                                }),
+                                            );
+                                            if is_selected {
+                                                ui.label(
+                                                    egui::RichText::new("✓")
+                                                        .size(14.0 * s)
+                                                        .color(Color32::from_rgb(0, 255, 170)),
+                                                );
+                                            }
+                                        });
+                                    })
+                                    .response;
+
+                                if response.clicked() {
+                                    if is_selected {
+                                        app.collage_photo_indices.retain(|&idx| idx != i);
+                                    } else if app.collage_photo_indices.len() < required {
+                                        app.collage_photo_indices.push(i);
+                                    }
+                                }
+                            }
+                        });
+                        ui.add_space(8.0 * s);
+                    }
+                });
+
+            // Bottom create button
+            if app.collage_photo_indices.len() == required {
+                ui.add_space(12.0 * s);
+                ui.vertical_centered(|ui| {
+                    let btn_width = ui.available_width().min(400.0 * s);
+                    let create_btn = egui::Button::new(
+                        egui::RichText::new(pack.create_collage)
+                            .size(16.0 * s)
+                            .strong()
+                            .color(Color32::WHITE),
+                    )
+                    .fill(Color32::from_rgb(0, 229, 255))
+                    .rounding(Rounding::same(10.0 * s))
+                    .min_size(Vec2::new(btn_width, 72.0 * s));
+                    if ui.add(create_btn).clicked() {
+                        // Render collage
+                        let size = app.selected_product_size.clone();
+                        let layout = app.selected_layout.unwrap();
+                        let paths: Vec<std::path::PathBuf> = app
+                            .collage_photo_indices
+                            .iter()
+                            .map(|&idx| app.photos[idx].path.clone())
+                            .collect();
+                        let temp_dir = &app.config.temp_directory;
+                        let output_path = temp_dir.join(format!(
+                            "collage_{}_{}.jpg",
+                            std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_secs(),
+                            fastrand::u32(0..10000)
+                        ));
+                        let path_refs: Vec<&std::path::Path> =
+                            paths.iter().map(|p| p.as_path()).collect();
+                        match crate::collage::render_collage(
+                            layout,
+                            &path_refs,
+                            &output_path,
+                            &size,
+                        ) {
+                            Ok(()) => {
+                                app.collage_preview_path = Some(output_path.clone());
+                                // Add the rendered collage as a new photo
+                                app.rescan();
+                                // Find the newly added photo and select it
+                                if let Some(idx) =
+                                    app.photos.iter().position(|p| p.path == output_path)
+                                {
+                                    app.selected_photo = idx;
+                                    app.current_edit = crate::app::PhotoEdit::default();
+                                    app.screen = AppScreen::Preview;
+                                    app.show_toast("Kollage skapat".to_string());
+                                }
+                            }
+                            Err(e) => {
+                                app.show_toast_long(format!("Kollagefel: {}", e));
+                            }
+                        }
+                    }
+                });
+            }
+        });
+}
+
+// =============================================================================
+// SETTINGS AUTH SCREEN — PIN entry to access admin
+// =============================================================================
+fn draw_settings_auth(ctx: &egui::Context, app: &mut ZalStudio) {
+    let pack = l(app.lang);
+    let s = touch_scale(ctx);
+    let bg_main = Color32::from_rgb(10, 15, 26);
+    let blue_accent = Color32::from_rgb(0, 229, 255);
+    let text_dark = Color32::from_rgb(224, 247, 255);
+
+    egui::CentralPanel::default()
+        .frame(Frame::none().inner_margin(24.0 * s))
+        .show(ctx, |ui| {
+            let rect = ui.max_rect();
+            ui.painter().rect_filled(rect, 0.0, bg_main);
+
+            ui.vertical_centered(|ui| {
+                ui.add_space(80.0 * s);
+                ui.label(
+                    egui::RichText::new("⚙  Inställningar")
+                        .size(32.0 * s)
+                        .strong()
+                        .color(text_dark),
+                );
+                ui.add_space(20.0 * s);
+                ui.label(
+                    egui::RichText::new("Ange PIN-kod")
+                        .size(18.0 * s)
+                        .color(Color32::from_rgb(100, 160, 220)),
+                );
+                ui.add_space(24.0 * s);
+
+                // PIN display
+                let mask = if app.settings_pin_input.is_empty() {
+                    "____".to_string()
+                } else {
+                    app.settings_pin_input
+                        .chars()
+                        .map(|_| '●')
+                        .collect::<String>()
+                };
+                ui.label(
+                    egui::RichText::new(mask)
+                        .size(40.0 * s)
+                        .monospace()
+                        .strong()
+                        .color(blue_accent),
+                );
+                ui.add_space(16.0 * s);
+
+                if app.settings_auth_failed {
+                    ui.label(
+                        egui::RichText::new("Fel PIN-kod")
+                            .size(14.0 * s)
+                            .color(Color32::from_rgb(255, 51, 102)),
+                    );
+                    ui.add_space(8.0 * s);
+                }
+
+                // Numpad
+                let btn_size = Vec2::new(72.0 * s, 60.0 * s);
+                for row in &[
+                    ['1', '2', '3'],
+                    ['4', '5', '6'],
+                    ['7', '8', '9'],
+                    ['C', '0', '←'],
+                ] {
+                    ui.horizontal(|ui| {
+                        ui.add_space((ui.available_width() - (btn_size.x * 3.0 + 20.0 * s)) / 2.0);
+                        for &ch in row {
+                            let label = ch.to_string();
+                            let btn = egui::Button::new(
+                                egui::RichText::new(&label)
+                                    .size(22.0 * s)
+                                    .strong()
+                                    .color(text_dark),
+                            )
+                            .fill(Color32::from_rgb(13, 19, 33))
+                            .stroke(Stroke::new(1.5 * s, Color32::from_rgb(0, 153, 170)))
+                            .rounding(Rounding::same(10.0 * s))
+                            .min_size(btn_size);
+                            if ui.add(btn).clicked() {
+                                match ch {
+                                    'C' => app.settings_pin_input.clear(),
+                                    '←' => {
+                                        app.settings_pin_input.pop();
+                                    }
+                                    _ => {
+                                        if app.settings_pin_input.len() < 6 {
+                                            app.settings_pin_input.push(ch);
+                                        }
+                                    }
+                                }
+                            }
+                            ui.add_space(10.0 * s);
+                        }
+                    });
+                    ui.add_space(10.0 * s);
+                }
+
+                ui.add_space(20.0 * s);
+
+                let btn_width = ui.available_width().min(240.0 * s);
+                if ui
+                    .add_sized(
+                        Vec2::new(btn_width, 52.0 * s),
+                        egui::Button::new(
+                            egui::RichText::new("OK")
+                                .size(18.0 * s)
+                                .strong()
+                                .color(Color32::WHITE),
+                        )
+                        .fill(Color32::from_rgb(0, 229, 255))
+                        .rounding(Rounding::same(10.0 * s)),
+                    )
+                    .clicked()
+                {
+                    if app.settings_pin_input == "1234" {
+                        app.screen = AppScreen::Settings;
+                        app.settings_auth_failed = false;
+                        app.settings_pin_input.clear();
+                        // Initialize edit state from current config
+                        app.settings_price_edit.clear();
+                        for size in &app.config.paper_sizes {
+                            let price = app.config.price_for_size(size);
+                            app.settings_price_edit
+                                .insert(size.clone(), format!("{:.0}", price));
+                        }
+                    } else {
+                        app.settings_auth_failed = true;
+                    }
+                }
+
+                ui.add_space(16.0 * s);
+                if nav_button(ui, pack.back, s).clicked() {
+                    app.screen = AppScreen::ProductSelect;
+                    app.settings_pin_input.clear();
+                    app.settings_auth_failed = false;
+                }
+            });
+        });
+}
+
+// =============================================================================
+// SETTINGS SCREEN — Admin panel for prices, products, general config
+// =============================================================================
+fn draw_settings(ctx: &egui::Context, app: &mut ZalStudio) {
+    let s = touch_scale(ctx);
+    let bg_main = Color32::from_rgb(10, 15, 26);
+    let bg_panel = Color32::from_rgb(10, 15, 26);
+    let blue_accent = Color32::from_rgb(0, 229, 255);
+    let text_dark = Color32::from_rgb(224, 247, 255);
+    let text_mid = Color32::from_rgb(142, 202, 230);
+
+    egui::CentralPanel::default()
+        .frame(Frame::none().inner_margin(16.0 * s))
+        .show(ctx, |ui| {
+            let rect = ui.max_rect();
+            ui.painter().rect_filled(rect, 0.0, bg_main);
+
+            // Top bar
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new("⚙  Inställningar")
+                        .size(22.0 * s)
+                        .strong()
+                        .color(blue_accent),
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if nav_button(ui, "✕", s).clicked() {
+                        app.screen = AppScreen::ProductSelect;
+                    }
+                });
+            });
+            ui.add_space(12.0 * s);
+
+            // Tabs
+            ui.horizontal(|ui| {
+                let tabs = [
+                    (crate::app::SettingsTab::Products, "Produkter"),
+                    (crate::app::SettingsTab::Prices, "Priser"),
+                    (crate::app::SettingsTab::General, "Allmänt"),
+                    (crate::app::SettingsTab::Dispatcher, "Dispatcher"),
+                ];
+                for (tab, label) in tabs {
+                    let active = app.settings_tab == tab;
+                    let btn = egui::Button::new(
+                        egui::RichText::new(label)
+                            .size(14.0 * s)
+                            .strong()
+                            .color(if active { Color32::WHITE } else { text_mid }),
+                    )
+                    .fill(if active {
+                        Color32::from_rgb(0, 153, 170)
+                    } else {
+                        bg_panel
+                    })
+                    .rounding(Rounding::same(8.0 * s))
+                    .min_size(Vec2::new(120.0 * s, 56.0 * s));
+                    if ui.add(btn).clicked() {
+                        app.settings_tab = tab;
+                    }
+                    ui.add_space(8.0 * s);
+                }
+            });
+            ui.add_space(16.0 * s);
+
+            match app.settings_tab {
+                crate::app::SettingsTab::Prices => {
+                    ui.label(
+                        egui::RichText::new("Redigera priser")
+                            .size(18.0 * s)
+                            .strong()
+                            .color(text_dark),
+                    );
+                    ui.add_space(12.0 * s);
+
+                    for size in &app.config.paper_sizes.clone() {
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                egui::RichText::new(format!("Format {}:", size))
+                                    .size(15.0 * s)
+                                    .color(text_mid),
+                            );
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    let edit = app
+                                        .settings_price_edit
+                                        .get(size)
+                                        .cloned()
+                                        .unwrap_or_else(|| "0".to_string());
+                                    let mut buf = edit;
+                                    let resp = ui.add(
+                                        egui::TextEdit::singleline(&mut buf)
+                                            .desired_width(80.0 * s)
+                                            .font(egui::TextStyle::Body),
+                                    );
+                                    if resp.changed() {
+                                        app.settings_price_edit.insert(size.clone(), buf);
+                                    }
+                                    ui.label(
+                                        egui::RichText::new("kr").size(14.0 * s).color(text_mid),
+                                    );
+                                },
+                            );
+                        });
+                        ui.add_space(8.0 * s);
+                    }
+
+                    ui.add_space(16.0 * s);
+                    if ui
+                        .add_sized(
+                            Vec2::new(180.0 * s, 48.0 * s),
+                            egui::Button::new(
+                                egui::RichText::new("💾 Spara priser")
+                                    .size(15.0 * s)
+                                    .strong()
+                                    .color(Color32::WHITE),
+                            )
+                            .fill(Color32::from_rgb(0, 229, 255))
+                            .rounding(Rounding::same(8.0 * s)),
+                        )
+                        .clicked()
+                    {
+                        for (size, val_str) in &app.settings_price_edit {
+                            if let Ok(price) = val_str.parse::<f64>() {
+                                app.config.price_per_format.insert(size.clone(), price);
+                            }
+                        }
+                        if let Err(e) = app.config.save() {
+                            app.show_toast_long(format!("Kunde inte spara: {}", e));
+                        } else {
+                            app.settings_save_confirm = 3.0;
+                            app.show_toast("Priser sparade".to_string());
+                        }
+                    }
+                    if app.settings_save_confirm > 0.0 {
+                        ui.add_space(8.0 * s);
+                        ui.label(
+                            egui::RichText::new("✓ Sparat!")
+                                .size(14.0 * s)
+                                .color(Color32::from_rgb(0, 255, 170)),
+                        );
+                    }
+                }
+                crate::app::SettingsTab::Products => {
+                    ui.label(
+                        egui::RichText::new("Produkter")
+                            .size(18.0 * s)
+                            .strong()
+                            .color(text_dark),
+                    );
+                    ui.add_space(12.0 * s);
+                    ui.label(
+                        egui::RichText::new(
+                            "Här kan du aktivera/avaktivera produkter (kommer snart)",
+                        )
+                        .size(13.0 * s)
+                        .color(text_mid),
+                    );
+                }
+                crate::app::SettingsTab::General => {
+                    ui.label(
+                        egui::RichText::new("Allmänna inställningar")
+                            .size(18.0 * s)
+                            .strong()
+                            .color(text_dark),
+                    );
+                    ui.add_space(12.0 * s);
+
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new("Temp-katalog:")
+                                .size(14.0 * s)
+                                .color(text_mid),
+                        );
+                        ui.label(
+                            egui::RichText::new(
+                                app.config.temp_directory.to_string_lossy().to_string(),
+                            )
+                            .size(13.0 * s)
+                            .color(text_dark),
+                        );
+                    });
+                    ui.add_space(8.0 * s);
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new("Foto-katalog:")
+                                .size(14.0 * s)
+                                .color(text_mid),
+                        );
+                        ui.label(
+                            egui::RichText::new(
+                                app.config.photo_directory.to_string_lossy().to_string(),
+                            )
+                            .size(13.0 * s)
+                            .color(text_dark),
+                        );
+                    });
+                    ui.add_space(8.0 * s);
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new("Server-port:")
+                                .size(14.0 * s)
+                                .color(text_mid),
+                        );
+                        ui.label(
+                            egui::RichText::new(app.config.server_port.to_string())
+                                .size(13.0 * s)
+                                .color(text_dark),
+                        );
+                    });
+                    ui.add_space(8.0 * s);
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new("Pappersformat:")
+                                .size(14.0 * s)
+                                .color(text_mid),
+                        );
+                        ui.label(
+                            egui::RichText::new(app.config.paper_sizes.join(", "))
+                                .size(13.0 * s)
+                                .color(text_dark),
+                        );
+                    });
+                }
+                crate::app::SettingsTab::Dispatcher => {
+                    ui.label(
+                        egui::RichText::new("Dispatcher — Utskriftshistorik")
+                            .size(18.0 * s)
+                            .strong()
+                            .color(text_dark),
+                    );
+                    ui.add_space(12.0 * s);
+
+                    let entries = crate::print_history::list_history(&app.config.temp_directory);
+                    if entries.is_empty() {
+                        ui.label(
+                            egui::RichText::new("Inga utskrifter i historiken än.")
+                                .size(14.0 * s)
+                                .color(text_mid),
+                        );
+                    } else {
+                        ui.label(
+                            egui::RichText::new(format!("{} utskrifter sparade (max 30)", entries.len()))
+                                .size(13.0 * s)
+                                .color(text_mid),
+                        );
+                        ui.add_space(8.0 * s);
+
+                        egui::ScrollArea::vertical().show(ui, |ui| {
+                            for entry in entries {
+                                let status_color = match entry.record.status.as_str() {
+                                    "completed" | "done" => Color32::from_rgb(0, 255, 170),
+                                    "failed" => Color32::from_rgb(255, 51, 102),
+                                    _ => Color32::from_rgb(0, 229, 255),
+                                };
+
+                                let card = Frame::none()
+                                    .fill(Color32::from_rgb(17, 24, 39))
+                                    .rounding(Rounding::same(8.0 * s))
+                                    .inner_margin(10.0 * s)
+                                    .stroke(Stroke::new(1.0 * s, Color32::from_rgb(30, 40, 60)));
+
+                                card.show(ui, |ui| {
+                                    ui.set_width(ui.available_width());
+                                    ui.horizontal(|ui| {
+                                        ui.vertical(|ui| {
+                                            ui.label(
+                                                egui::RichText::new(&entry.record.photo_name)
+                                                    .size(14.0 * s)
+                                                    .strong()
+                                                    .color(text_dark),
+                                            );
+                                            ui.label(
+                                                egui::RichText::new(format!(
+                                                    "{}  |  {} kopior  |  {}  |  {}",
+                                                    entry.record.paper_size,
+                                                    entry.record.copies,
+                                                    entry.record.printer,
+                                                    entry.folder_name
+                                                ))
+                                                .size(12.0 * s)
+                                                .color(text_mid),
+                                            );
+                                            ui.horizontal(|ui| {
+                                                ui.label(
+                                                    egui::RichText::new("Status:")
+                                                        .size(12.0 * s)
+                                                        .color(text_mid),
+                                                );
+                                                ui.label(
+                                                    egui::RichText::new(&entry.record.status)
+                                                        .size(12.0 * s)
+                                                        .strong()
+                                                        .color(status_color),
+                                                );
+                                                if let Some(ref err) = entry.record.error {
+                                                    ui.label(
+                                                        egui::RichText::new(format!("— {}", err))
+                                                            .size(11.0 * s)
+                                                            .color(Color32::from_rgb(255, 51, 102)),
+                                                    );
+                                                }
+                                            });
+                                        });
+
+                                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                            if ui
+                                                .add_sized(
+                                                    Vec2::new(100.0 * s, 40.0 * s),
+                                                    egui::Button::new(
+                                                        egui::RichText::new("🖨  Skriv ut igen")
+                                                            .size(12.0 * s)
+                                                            .strong()
+                                                            .color(Color32::WHITE),
+                                                    )
+                                                    .fill(Color32::from_rgb(0, 153, 170))
+                                                    .rounding(Rounding::same(8.0 * s)),
+                                                )
+                                                .clicked()
+                                            {
+                                                if let Err(e) = app.reprint_from_history(&entry.folder_path) {
+                                                    app.show_toast_long(format!("Utskrift misslyckades: {}", e));
+                                                } else {
+                                                    app.show_toast(format!("{} skickad till skrivaren igen", entry.record.photo_name));
+                                                }
+                                            }
+                                        });
+                                    });
+                                });
+                                ui.add_space(8.0 * s);
+                            }
+                        });
+                    }
+                }
             }
         });
 }

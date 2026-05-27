@@ -8,7 +8,7 @@ use egui::{Context, TextureHandle};
 use crate::config::Config;
 use crate::gallery::{Photo, discover_photos};
 use crate::lang::Language;
-use crate::printer::{PrintJob, Printer};
+use crate::printer::{JobStatus, PrintJob, Printer};
 
 use crate::mtp_backend::{MtpCommand, MtpPhoto, MtpResult, spawn_mtp_worker};
 
@@ -33,7 +33,13 @@ pub enum AppScreen {
     GoogleDrivePicker,
     GooglePhotosPicker,
     PrintDone,
+    PrintProgress,
+    ThankYou,
     Payment,
+    LayoutSelect,
+    CollageEditor,
+    SettingsAuth,
+    Settings,
 }
 
 // ============================================================================
@@ -43,6 +49,12 @@ pub enum AppScreen {
 pub enum PhoneType {
     Android,
     IPhone,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GallerySort {
+    Date,
+    Name,
 }
 
 // ============================================================================
@@ -64,6 +76,10 @@ pub struct PhotoEdit {
     pub pan_y: f32,    // -1.0 .. 1.0 vertical pan
     pub rotation: u32, // 0, 90, 180, 270 degrees
     pub grayscale: bool,
+    pub text_overlay: String, // text to draw on image
+    pub text_x: f32,          // 0.0..1.0 relative position
+    pub text_y: f32,          // 0.0..1.0 relative position
+    pub text_size: u32,       // font size in pixels on output
 }
 
 impl Default for PhotoEdit {
@@ -74,6 +90,10 @@ impl Default for PhotoEdit {
             pan_y: 0.0,
             rotation: 0,
             grayscale: false,
+            text_overlay: String::new(),
+            text_x: 0.5,
+            text_y: 0.5,
+            text_size: 48,
         }
     }
 }
@@ -99,6 +119,10 @@ pub struct ZalStudio {
     // Photos
     pub photos: Vec<Photo>,
     pub selected_photo: usize,
+    /// Multi-selected photo indices for batch ordering (new gallery flow)
+    pub selected_photos: Vec<usize>,
+    /// Copies per photo per size: photo_idx -> size -> count
+    pub photo_copies: HashMap<usize, HashMap<String, u32>>,
 
     // Current edit settings for the photo being previewed
     pub current_edit: PhotoEdit,
@@ -113,6 +137,13 @@ pub struct ZalStudio {
     pub printers: Vec<Printer>,
     pub print_jobs: Vec<PrintJob>,
     pub print_done_timer: f32,
+    pub print_progress_total: usize,
+    pub print_progress_done: usize,
+    pub print_progress_failed: usize,
+    pub print_progress_start: Option<Instant>,
+    pub thank_you_timer: f32,
+    /// Maps print job id -> history folder path for status updates
+    pub history_job_map: std::collections::HashMap<usize, PathBuf>,
 
     // Config
     pub config: Config,
@@ -144,6 +175,10 @@ pub struct ZalStudio {
     // Thumbnail background loader
     pub thumb_rx: Option<Receiver<(String, egui::ColorImage)>>,
 
+    // Save-edit background worker
+    pub save_rx: Option<Receiver<Result<(), String>>>,
+    pub save_in_progress: bool,
+
     // Phone connection
     pub phone_type: PhoneType,
     pub phone_connect_start: Option<Instant>,
@@ -163,6 +198,16 @@ pub struct ZalStudio {
 
     // Product selection (Foto / Album / Collage)
     pub selected_product: String,
+    pub selected_product_size: String,
+
+    // Gallery sorting
+    pub gallery_sort: GallerySort,
+    pub gallery_sort_ascending: bool,
+
+    // Collage / Album
+    pub selected_layout: Option<crate::collage::CollageLayout>,
+    pub collage_photo_indices: Vec<usize>,
+    pub collage_preview_path: Option<PathBuf>,
 
     // Picker context
     pub picker_source: PickerSource,
@@ -190,25 +235,70 @@ pub struct ZalStudio {
     pub textures_loaded_this_frame: usize,
     pub last_texture_pass: u64,
     pub max_textures_per_frame: usize,
+
+    // Print history
+    pub history_folders: Vec<std::path::PathBuf>,
+
+    // Settings / admin
+    pub settings_pin_input: String,
+    pub settings_auth_failed: bool,
+    pub settings_tab: SettingsTab,
+    pub settings_price_edit: HashMap<String, String>,
+    pub settings_product_active: HashMap<String, bool>,
+    pub settings_save_confirm: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsTab {
+    Products,
+    Prices,
+    General,
+    Dispatcher,
 }
 
 impl ZalStudio {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        // Load emoji font for icons
-        let emoji_path = "/usr/share/fonts/noto/NotoColorEmoji.ttf";
-        if let Ok(emoji_data) = std::fs::read(emoji_path) {
-            let mut fonts = egui::FontDefinitions::default();
+        // Request window focus immediately on X11 kiosk setups
+        cc.egui_ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+
+        // Load system symbol/emoji fonts for broad Unicode coverage (icons)
+        let mut fonts = egui::FontDefinitions::default();
+
+        // DejaVu Sans has excellent symbol/geometric-shape coverage
+        if let Ok(dejavu_data) = std::fs::read("/usr/share/fonts/TTF/DejaVuSans.ttf") {
+            fonts.font_data.insert(
+                "dejavu_sans".to_owned(),
+                egui::FontData::from_owned(dejavu_data),
+            );
+        }
+
+        // Noto Color Emoji for full-colour emojis
+        if let Ok(emoji_data) = std::fs::read("/usr/share/fonts/noto/NotoColorEmoji.ttf") {
             fonts.font_data.insert(
                 "noto_color_emoji".to_owned(),
-                egui::FontData::from_owned(emoji_data),
+                egui::FontData::from_owned(emoji_data).tweak(egui::FontTweak {
+                    scale: 0.90,
+                    ..Default::default()
+                }),
             );
-            fonts
-                .families
-                .entry(egui::FontFamily::Proportional)
-                .or_default()
-                .push("noto_color_emoji".to_owned());
-            cc.egui_ctx.set_fonts(fonts);
         }
+
+        // Insert as fallbacks AFTER the built-in fonts so built-ins are tried first
+        for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+            let list = fonts.families.entry(family).or_default();
+            if fonts.font_data.contains_key("dejavu_sans")
+                && !list.contains(&"dejavu_sans".to_owned())
+            {
+                list.push("dejavu_sans".to_owned());
+            }
+            if fonts.font_data.contains_key("noto_color_emoji")
+                && !list.contains(&"noto_color_emoji".to_owned())
+            {
+                list.push("noto_color_emoji".to_owned());
+            }
+        }
+
+        cc.egui_ctx.set_fonts(fonts);
 
         let config = Config::load();
         let lang = Language::default();
@@ -245,6 +335,8 @@ impl ZalStudio {
             lang,
             photos,
             selected_photo: 0,
+            selected_photos: Vec::new(),
+            photo_copies: HashMap::new(),
             current_edit: PhotoEdit::default(),
             queue: Vec::new(),
             queue_selected: 0,
@@ -255,6 +347,13 @@ impl ZalStudio {
             printers,
             print_jobs: Vec::new(),
             print_done_timer: 5.0,
+            print_progress_total: 0,
+            print_progress_done: 0,
+            print_progress_failed: 0,
+            print_progress_start: None,
+            thank_you_timer: 5.0,
+            history_folders: Vec::new(),
+            history_job_map: std::collections::HashMap::new(),
             config,
             import_status: String::new(),
             server_url,
@@ -269,6 +368,8 @@ impl ZalStudio {
             previous_wifi_conn: None,
             usb_rx: None,
             thumb_rx: None,
+            save_rx: None,
+            save_in_progress: false,
             phone_type: PhoneType::Android,
             phone_connect_start: None,
             phone_poll_last: Instant::now(),
@@ -290,11 +391,23 @@ impl ZalStudio {
             photo_selected: Vec::new(),
             picker_source: PickerSource::Phone,
             selected_product: String::new(),
+            selected_product_size: String::new(),
+            gallery_sort: GallerySort::Date,
+            gallery_sort_ascending: false,
+            selected_layout: None,
+            collage_photo_indices: Vec::new(),
+            collage_preview_path: None,
             toast: None,
             textures: HashMap::new(),
             textures_loaded_this_frame: 0,
             last_texture_pass: 0,
             max_textures_per_frame: 4,
+            settings_pin_input: String::new(),
+            settings_auth_failed: false,
+            settings_tab: SettingsTab::Products,
+            settings_price_edit: HashMap::new(),
+            settings_product_active: HashMap::new(),
+            settings_save_confirm: 0.0,
         }
     }
 
@@ -385,7 +498,27 @@ impl ZalStudio {
         let mut temp_photos = discover_photos(&self.config.temp_directory);
         photos.append(&mut temp_photos);
         self.photos = photos;
+        self.apply_gallery_sort();
         self.textures.clear();
+    }
+
+    pub fn apply_gallery_sort(&mut self) {
+        self.photos.sort_by(|a, b| {
+            let ord = match self.gallery_sort {
+                GallerySort::Date => match (a.date_taken, b.date_taken) {
+                    (Some(d1), Some(d2)) => d1.cmp(&d2),
+                    (Some(_), None) => std::cmp::Ordering::Less,
+                    (None, Some(_)) => std::cmp::Ordering::Greater,
+                    (None, None) => a.file_name.cmp(&b.file_name),
+                },
+                GallerySort::Name => a.file_name.cmp(&b.file_name),
+            };
+            if self.gallery_sort_ascending {
+                ord
+            } else {
+                ord.reverse()
+            }
+        });
     }
 
     /// After an import, jump directly to Preview with the first newly-imported
@@ -395,14 +528,18 @@ impl ZalStudio {
             self.screen = AppScreen::Gallery;
             return;
         }
-        let temp_dir = &self.config.temp_directory;
-        self.selected_photo = self
-            .photos
-            .iter()
-            .position(|p| p.path.starts_with(temp_dir))
-            .unwrap_or(0);
-        self.current_edit = PhotoEdit::default();
-        self.screen = AppScreen::Preview;
+        // For collage / album products, go to layout selection first
+        if self.selected_product == "collage" || self.selected_product == "album" {
+            self.collage_photo_indices.clear();
+            self.selected_layout = None;
+            self.screen = AppScreen::LayoutSelect;
+            return;
+        }
+        // For normal foto prints, go to the gallery so user can select multiple
+        // photos and set copies per size
+        self.selected_photos.clear();
+        self.photo_copies.clear();
+        self.screen = AppScreen::Gallery;
     }
 
     // ========================================================================
@@ -484,8 +621,7 @@ impl ZalStudio {
     // Printer helper
     // ========================================================================
     pub fn printer_for_current_size(&self) -> Option<&str> {
-        let size = self.config.paper_sizes.get(self.paper_size_idx)?;
-        self.config.printer_for_size(size)
+        self.config.printer_for_size(&self.selected_product_size)
     }
 
     // ========================================================================
@@ -493,19 +629,94 @@ impl ZalStudio {
     // ========================================================================
     pub fn add_to_queue(&mut self) {
         let _ = self.photos.get(self.selected_photo);
-        let paper_size = self
-            .config
-            .paper_sizes
-            .get(self.paper_size_idx)
-            .cloned()
-            .unwrap_or_else(|| "10x15".to_string());
+        let paper_size = self.selected_product_size.clone();
         self.queue.push(QueueItem {
             photo_idx: self.selected_photo,
             copies: self.copies,
             paper_size,
-            edit: self.current_edit.clone(),
+            edit: PhotoEdit::default(),
         });
         self.show_toast("Tillagd i kön".to_string());
+    }
+
+    /// Render the current edit and save it back over the original photo file,
+    /// then refresh the gallery entry so the updated image is shown.
+    pub fn save_current_edit(&mut self) -> Result<(), String> {
+        let photo = self
+            .photos
+            .get(self.selected_photo)
+            .ok_or("Ingen bild vald")?;
+        let src_path = photo.path.clone();
+        let paper_size = self.selected_product_size.clone();
+
+        // Ensure photo directory exists
+        let _ = std::fs::create_dir_all(&self.config.photo_directory);
+
+        // Render edited image
+        let out_path = render_edited_photo(
+            &src_path,
+            &self.current_edit,
+            &paper_size,
+            &self.config.photo_directory,
+        )?;
+
+        // Atomically replace original file
+        let tmp_path = src_path.with_extension("tmp");
+        std::fs::copy(&out_path, &tmp_path)
+            .map_err(|e| format!("Kunde inte kopiera redigerad bild: {}", e))?;
+        std::fs::rename(&tmp_path, &src_path).map_err(|e| format!("Kunde inte spara: {}", e))?;
+        let _ = std::fs::remove_file(&out_path);
+
+        // Reload dimensions from the saved file
+        if let Ok(img) = image::open(&src_path) {
+            if let Some(p) = self.photos.get_mut(self.selected_photo) {
+                p.dimensions = Some((img.width(), img.height()));
+            }
+        }
+
+        // Remove old texture from cache so it reloads
+        let key = src_path.to_string_lossy().to_string();
+        self.textures.remove(&key);
+
+        // Reset edit state
+        self.current_edit = PhotoEdit::default();
+
+        self.show_toast("Bilden sparad".to_string());
+        self.screen = AppScreen::Gallery;
+        Ok(())
+    }
+
+    /// Spawn a background thread to render and save the edited image.
+    /// Sets `save_in_progress = true` and stores the receiver in `save_rx`.
+    pub fn start_save_edit_thread(&mut self) {
+        let photo = match self.photos.get(self.selected_photo) {
+            Some(p) => p.clone(),
+            None => {
+                self.show_toast_long("Ingen bild vald".to_string());
+                return;
+            }
+        };
+        let edit = self.current_edit.clone();
+        let paper_size = self.selected_product_size.clone();
+        let photo_dir = self.config.photo_directory.clone();
+
+        self.save_in_progress = true;
+        let (tx, rx) = channel();
+        self.save_rx = Some(rx);
+
+        std::thread::spawn(move || {
+            let result = (|| -> Result<(), String> {
+                let out_path = render_edited_photo(&photo.path, &edit, &paper_size, &photo_dir)?;
+                let tmp_path = photo.path.with_extension("tmp");
+                std::fs::copy(&out_path, &tmp_path)
+                    .map_err(|e| format!("Kunde inte kopiera redigerad bild: {}", e))?;
+                std::fs::rename(&tmp_path, &photo.path)
+                    .map_err(|e| format!("Kunde inte spara: {}", e))?;
+                let _ = std::fs::remove_file(&out_path);
+                Ok(())
+            })();
+            let _ = tx.send(result);
+        });
     }
 
     pub fn remove_from_queue(&mut self, idx: usize) {
@@ -528,6 +739,74 @@ impl ZalStudio {
                 price * item.copies as f64
             })
             .sum()
+    }
+
+    // ── Photo copy helpers for new gallery order builder ─────────────────────
+    pub fn photo_copy_count(&self, photo_idx: usize, size: &str) -> u32 {
+        self.photo_copies
+            .get(&photo_idx)
+            .and_then(|m| m.get(size))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    pub fn set_photo_copy_count(&mut self, photo_idx: usize, size: &str, count: u32) {
+        self.photo_copies
+            .entry(photo_idx)
+            .or_default()
+            .insert(size.to_string(), count);
+        if count == 0 {
+            if let Some(m) = self.photo_copies.get_mut(&photo_idx) {
+                m.remove(size);
+                if m.is_empty() {
+                    self.photo_copies.remove(&photo_idx);
+                }
+            }
+        }
+    }
+
+    pub fn total_copies_for_photo(&self, photo_idx: usize) -> u32 {
+        self.photo_copies
+            .get(&photo_idx)
+            .map(|m| m.values().sum())
+            .unwrap_or(0)
+    }
+
+    pub fn total_order_copies(&self) -> u32 {
+        self.photo_copies
+            .values()
+            .map(|m| m.values().sum::<u32>())
+            .sum()
+    }
+
+    pub fn total_order_price(&self) -> f64 {
+        self.photo_copies
+            .iter()
+            .map(|(photo_idx, sizes)| {
+                sizes
+                    .iter()
+                    .map(|(size, count)| {
+                        let price = self.config.price_for_size(size);
+                        price * *count as f64
+                    })
+                    .sum::<f64>()
+            })
+            .sum()
+    }
+
+    pub fn add_selected_to_queue(&mut self) {
+        for (&photo_idx, sizes) in &self.photo_copies {
+            for (size, &count) in sizes {
+                if count > 0 {
+                    self.queue.push(QueueItem {
+                        photo_idx,
+                        paper_size: size.clone(),
+                        copies: count,
+                        edit: PhotoEdit::default(),
+                    });
+                }
+            }
+        }
     }
 
     pub fn print_queue(&mut self) {
@@ -563,9 +842,10 @@ impl ZalStudio {
             };
 
             // Render edited version (crop, rotate, B&W) to a temp file
+            // Always print original (edits are saved destructively to the source file)
             let edit_path = match render_edited_photo(
                 &photo.path,
-                &item.edit,
+                &PhotoEdit::default(),
                 &item.paper_size,
                 &self.config.temp_directory,
             ) {
@@ -577,12 +857,30 @@ impl ZalStudio {
                 }
             };
 
+            // Save to print history before dispatching
+            let hist_result = crate::print_history::save_print(
+                &self.config.temp_directory,
+                &edit_path,
+                &photo.file_name,
+                &item.paper_size,
+                item.copies,
+                printer_name,
+                "pending",
+                None,
+            );
+            let hist_folder = hist_result.ok();
+
             let job_id = printer.queue_job(
                 &edit_path,
                 &item.paper_size,
                 item.copies,
                 self.config.fit_to_page,
             );
+
+            if let Some(folder) = hist_folder {
+                self.history_folders.push(folder.clone());
+                self.history_job_map.insert(job_id, folder);
+            }
             eprintln!(
                 "[PRINT] Queued job {} on {} for {} ({} copies, {})",
                 job_id, printer_name, photo.file_name, item.copies, item.paper_size
@@ -594,8 +892,11 @@ impl ZalStudio {
         self.queue_selected = 0;
 
         if dispatched > 0 {
-            self.screen = AppScreen::PrintDone;
-            self.print_done_timer = 5.0;
+            self.print_progress_total = dispatched;
+            self.print_progress_done = 0;
+            self.print_progress_failed = failed;
+            self.print_progress_start = Some(Instant::now());
+            self.screen = AppScreen::PrintProgress;
             if failed > 0 {
                 self.show_toast(format!("{} skrivna, {} misslyckades", dispatched, failed));
             } else {
@@ -607,11 +908,76 @@ impl ZalStudio {
         }
     }
 
+    pub fn reset_for_new_customer(&mut self) {
+        self.photos.clear();
+        self.selected_photo = 0;
+        self.selected_photos.clear();
+        self.photo_copies.clear();
+        self.current_edit = PhotoEdit::default();
+        self.queue.clear();
+        self.queue_selected = 0;
+        self.queue_clear_confirm = false;
+        self.queue_clear_timer = 0.0;
+        self.print_jobs.clear();
+        self.print_progress_total = 0;
+        self.print_progress_done = 0;
+        self.print_progress_failed = 0;
+        self.print_progress_start = None;
+        // NOTE: history_folders is kept across customers
+        self.history_job_map.clear();
+        self.selected_product.clear();
+        self.selected_product_size.clear();
+        self.selected_layout = None;
+        self.collage_photo_indices.clear();
+        self.collage_preview_path = None;
+        self.mtp_photos.clear();
+        self.mtp_selected.clear();
+        self.phone_photos.clear();
+        self.phone_selected.clear();
+        self.mtp_raw_photos.clear();
+        self.textures.clear();
+        self.screen = AppScreen::ProductSelect;
+    }
+
     // ========================================================================
     // Toast
     // ========================================================================
     pub fn show_toast(&mut self, msg: String) {
         self.toast = Some((msg, 2.0));
+    }
+
+    pub fn reprint_from_history(&mut self, folder: &std::path::Path) -> Result<(), String> {
+        let record_path = folder.join("record.json");
+        let contents = std::fs::read_to_string(&record_path).map_err(|e| e.to_string())?;
+        let record: crate::print_history::PrintRecord =
+            serde_json::from_str(&contents).map_err(|e| e.to_string())?;
+
+        let ext = std::path::Path::new(&record.photo_name)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("jpg");
+        let photo_path = folder.join(format!("print.{}", ext));
+        if !photo_path.exists() {
+            return Err("Utskriftsfilen hittades inte".to_string());
+        }
+
+        let printer_name = match self.config.printer_for_size(&record.paper_size) {
+            Some(name) => name,
+            None => return Err(format!("Ingen skrivare konfigurerad för {}", record.paper_size)),
+        };
+
+        let printer = match self.printers.iter_mut().find(|p| p.name() == printer_name) {
+            Some(p) => p,
+            None => return Err(format!("Skrivaren '{}' hittades inte", printer_name)),
+        };
+
+        let _job_id = printer.queue_job(
+            &photo_path,
+            &record.paper_size,
+            record.copies,
+            self.config.fit_to_page,
+        );
+        Ok(())
     }
 
     pub fn show_toast_long(&mut self, msg: String) {
@@ -998,11 +1364,58 @@ impl eframe::App for ZalStudio {
             }
         }
 
-        // Update print done timer
-        if self.screen == AppScreen::PrintDone {
-            self.print_done_timer -= ctx.input(|i| i.unstable_dt);
-            if self.print_done_timer <= 0.0 {
-                self.screen = AppScreen::Gallery;
+        // Update print progress — poll printer jobs
+        if self.screen == AppScreen::PrintProgress {
+            let mut done = 0;
+            let mut failed = 0;
+            let mut queued = 0;
+            let mut printing = 0;
+            for printer in &self.printers {
+                for job in printer.jobs() {
+                    match &job.status {
+                        JobStatus::Done => {
+                            done += 1;
+                            // Update history status to done
+                            if let Some(folder) = self.history_job_map.get(&job.id) {
+                                let _ = crate::print_history::update_print_status(folder, "done", None);
+                            }
+                        }
+                        JobStatus::Failed(e) => {
+                            failed += 1;
+                            eprintln!("[PRINT] Job {} failed: {}", job.id, e);
+                            if let Some(folder) = self.history_job_map.get(&job.id) {
+                                let _ = crate::print_history::update_print_status(folder, "failed", Some(e));
+                            }
+                        }
+                        JobStatus::Queued => queued += 1,
+                        JobStatus::Printing => printing += 1,
+                    }
+                }
+            }
+            self.print_progress_done = done;
+            self.print_progress_failed = failed;
+
+            let total = self.print_progress_total;
+            let elapsed = self.print_progress_start.map(|t| t.elapsed().as_secs_f32()).unwrap_or(0.0);
+            eprintln!("[PRINT-PROGRESS] total={}, done={}, failed={}, elapsed={:.1}s", total, done, failed, elapsed);
+
+            // Must show progress for at least 2 seconds so user can see it
+            let all_done = done + failed >= total && total > 0;
+            let min_time_met = elapsed >= 2.0;
+            if all_done && min_time_met {
+                eprintln!("[PRINT-PROGRESS] All jobs finished! Switching to ThankYou.");
+                self.screen = AppScreen::ThankYou;
+                self.thank_you_timer = 8.0;
+            } else {
+                ctx.request_repaint_after(Duration::from_millis(200));
+            }
+        }
+
+        // Update thank-you timer — reset for new customer when done
+        if self.screen == AppScreen::ThankYou {
+            self.thank_you_timer -= ctx.input(|i| i.unstable_dt);
+            if self.thank_you_timer <= 0.0 {
+                self.reset_for_new_customer();
             }
         }
 
@@ -1012,6 +1425,11 @@ impl eframe::App for ZalStudio {
             if self.queue_clear_timer <= 0.0 {
                 self.queue_clear_confirm = false;
             }
+        }
+
+        // Update settings save confirm timer
+        if self.settings_save_confirm > 0.0 {
+            self.settings_save_confirm -= ctx.input(|i| i.unstable_dt);
         }
 
         // Check for QR code updates
@@ -1031,6 +1449,45 @@ impl eframe::App for ZalStudio {
 
         // Check hotspot result
         self.check_hotspot_result();
+
+        // Poll save-edit background worker
+        if self.save_in_progress {
+            if let Some(ref rx) = self.save_rx {
+                match rx.try_recv() {
+                    Ok(Ok(())) => {
+                        self.save_in_progress = false;
+                        self.save_rx = None;
+                        // Reload dimensions from the saved file
+                        let photo_path =
+                            self.photos.get(self.selected_photo).map(|p| p.path.clone());
+                        if let Some(path) = photo_path {
+                            if let Ok(img) = image::open(&path) {
+                                if let Some(p2) = self.photos.get_mut(self.selected_photo) {
+                                    p2.dimensions = Some((img.width(), img.height()));
+                                }
+                            }
+                            // Remove old texture from cache so it reloads
+                            let key = path.to_string_lossy().to_string();
+                            self.textures.remove(&key);
+                        }
+                        self.current_edit = PhotoEdit::default();
+                        self.show_toast("Bilden sparad".to_string());
+                        self.screen = AppScreen::Gallery;
+                    }
+                    Ok(Err(e)) => {
+                        self.save_in_progress = false;
+                        self.save_rx = None;
+                        self.show_toast_long(format!("Sparfel: {}", e));
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        self.save_in_progress = false;
+                        self.save_rx = None;
+                        self.show_toast_long("Sparning avbröts oväntat".to_string());
+                    }
+                }
+            }
+        }
 
         // Poll USB background worker (used both during plug-wait and importing)
         if self.screen == AppScreen::UsbPlugWait || self.screen == AppScreen::Importing {
@@ -1190,6 +1647,34 @@ pub fn render_edited_photo(
 
     let cropped = img.crop_imm(cx as u32, cy as u32, crop_w as u32, crop_h as u32);
 
+    // Convert to RGBA for text drawing
+    let mut final_img = cropped.to_rgba8();
+
+    // Draw text overlay if present
+    if !edit.text_overlay.is_empty() {
+        if let Ok(font_data) = std::fs::read("/usr/share/fonts/TTF/DejaVuSans.ttf") {
+            if let Ok(font) = ab_glyph::FontArc::try_from_vec(font_data) {
+                let scale = ab_glyph::PxScale::from(edit.text_size as f32);
+                let (tw, th) = imageproc::drawing::text_size(scale, &font, &edit.text_overlay);
+                let x = ((final_img.width().saturating_sub(tw)) as f32 * edit.text_x) as i32;
+                let y = ((final_img.height().saturating_sub(th)) as f32 * edit.text_y) as i32;
+                let white = image::Rgba([255u8, 255u8, 255u8, 255u8]);
+                imageproc::drawing::draw_text_mut(
+                    &mut final_img,
+                    white,
+                    x,
+                    y,
+                    scale,
+                    &font,
+                    &edit.text_overlay,
+                );
+            }
+        }
+    }
+
+    // JPEG does not support RGBA8 — convert back to RGB8 before saving
+    let rgb_img = image::DynamicImage::ImageRgba8(final_img).to_rgb8();
+
     // Save to temp
     let file_name = format!(
         "edit_{}_{}.jpg",
@@ -1200,7 +1685,7 @@ pub fn render_edited_photo(
         fastrand::u32(..)
     );
     let out_path = temp_dir.join(&file_name);
-    cropped.save(&out_path).map_err(|e| e.to_string())?;
+    rgb_img.save(&out_path).map_err(|e| e.to_string())?;
 
     Ok(out_path)
 }

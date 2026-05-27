@@ -1,4 +1,5 @@
 mod app;
+mod collage;
 mod config;
 mod gallery;
 mod google_drive;
@@ -6,6 +7,7 @@ mod import;
 mod lang;
 mod mtp_backend;
 mod printer;
+mod print_history;
 mod server;
 mod ui;
 mod usb_detect;
@@ -18,7 +20,8 @@ fn main() -> eframe::Result<()> {
         viewport: egui::ViewportBuilder::default()
             .with_fullscreen(true)
             .with_resizable(false)
-            .with_decorations(false),
+            .with_decorations(false)
+            .with_active(true),
         ..Default::default()
     };
 
