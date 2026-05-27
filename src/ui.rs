@@ -46,7 +46,6 @@ pub fn draw(ctx: &egui::Context, app: &mut ZalStudio) {
         AppScreen::MobileUpload => draw_mobile_upload(ctx, app),
         AppScreen::MobileMenu => draw_mobile_menu(ctx, app),
         AppScreen::PhoneConnecting => draw_phone_connecting(ctx, app),
-        AppScreen::PhoneFolderSelect => draw_phone_folder_select(ctx, app),
         AppScreen::WiredPhonePicker => draw_wired_phone_picker(ctx, app),
         AppScreen::GoogleDriveAuth => draw_google_drive_auth(ctx, app),
         AppScreen::GoogleDrivePicker => draw_google_drive_picker(ctx, app),
@@ -1125,12 +1124,13 @@ fn draw_preview(ctx: &egui::Context, app: &mut ZalStudio) {
     let bg_main = Color32::from_rgb(10, 15, 26);
     let text_dark = Color32::from_rgb(224, 247, 255);
     let text_mid = Color32::from_rgb(142, 202, 230);
+    let panel_bg = Color32::from_rgb(17, 24, 39);
 
     egui::CentralPanel::default()
         .frame(Frame::none().fill(bg_main).inner_margin(8.0 * s))
         .show(ctx, |ui| {
-            let rect = ui.max_rect();
-            ui.painter().rect_filled(rect, 0.0, bg_main);
+            let full_rect = ui.max_rect();
+            ui.painter().rect_filled(full_rect, 0.0, bg_main);
 
             // ── Top bar ─────────────────────────────────────────────────
             ui.horizontal(|ui| {
@@ -1162,342 +1162,436 @@ fn draw_preview(ctx: &egui::Context, app: &mut ZalStudio) {
 
             ui.add_space(4.0 * s);
 
-            // ── Image area (storbild) ───────────────────────────────────
             let paper_size = app.selected_product_size.clone();
             let frame_aspect = paper_size_aspect(&paper_size);
+            let saving = app.save_in_progress;
 
+            // Try full-res first, fall back to thumbnail while loading
             let tex_info = app.selected_texture(ctx).map(|t| (t.id(), t.size_vec2()));
+            let tex_info = tex_info.or_else(|| {
+                let path = app.photos.get(app.selected_photo)?.path.clone();
+                app.texture_for(ctx, &path).map(|t| (t.id(), t.size_vec2()))
+            });
 
             if let Some((tex_id, tex_size)) = tex_info {
                 let available = ui.available_size();
-                let max_img_w = available.x;
-                let max_img_h = available.y * 0.72; // bigger image, ~28% for controls
-                let img_w = max_img_w.min(max_img_h * frame_aspect);
-                let img_h = img_w / frame_aspect;
+                let bottom_h = 90.0 * s;
+                let main_h = available.y - bottom_h;
+                let left_w = 140.0 * s;
+                let right_w = 220.0 * s;
+                let gap = 16.0 * s;
+                let img_max_w = available.x - left_w - right_w - gap * 2.0;
+                let img_max_h = main_h;
 
-                let (img_rect, img_response) =
-                    ui.allocate_exact_size(Vec2::new(img_w, img_h), egui::Sense::drag());
+                // ── Main area: Left | Center (image) | Right ──────────────
+                ui.horizontal(|ui| {
+                    ui.set_height(main_h);
 
-                // Handle drag-to-pan
-                if img_response.dragged() {
-                    let delta = img_response.drag_delta();
-                    let sensitivity = 2.0 / app.current_edit.zoom.max(1.0);
-                    app.current_edit.pan_x -= delta.x / (img_w.max(1.0) * 0.5) * sensitivity;
-                    app.current_edit.pan_y -= delta.y / (img_h.max(1.0) * 0.5) * sensitivity;
-                    app.current_edit.pan_x = app.current_edit.pan_x.clamp(-1.0, 1.0);
-                    app.current_edit.pan_y = app.current_edit.pan_y.clamp(-1.0, 1.0);
-                }
+                    // LEFT PANEL
+                    ui.allocate_ui_with_layout(
+                        Vec2::new(left_w, main_h),
+                        egui::Layout::top_down(egui::Align::Center),
+                        |ui| {
+                            let panel_rect = ui.max_rect();
+                            ui.painter().rect_filled(panel_rect, 8.0 * s, panel_bg);
 
-                let uvs = calculate_crop_uvs(
-                    tex_size.x,
-                    tex_size.y,
-                    frame_aspect,
-                    app.current_edit.zoom,
-                    app.current_edit.pan_x,
-                    app.current_edit.pan_y,
-                    app.current_edit.rotation,
-                );
+                            ui.vertical_centered(|ui| {
+                                ui.add_space(12.0 * s);
 
-                let painter = ui.painter();
-                // Background
-                painter.rect_filled(img_rect, 4.0 * s, Color32::from_rgb(0, 229, 255));
-                // The image
-                draw_editable_image(painter, tex_id, img_rect, uvs, Color32::WHITE);
-                // Red dashed crop guide showing print area
-                draw_dashed_rect(
-                    painter,
-                    img_rect,
-                    Stroke::new(2.5 * s, Color32::from_rgb(255, 51, 102)),
-                    10.0 * s,
-                    6.0 * s,
-                );
+                                // Zoom out
+                                let zoom_out = egui::Button::new(
+                                    egui::RichText::new("−")
+                                        .size(22.0 * s)
+                                        .strong()
+                                        .color(Color32::WHITE),
+                                )
+                                .fill(Color32::from_rgb(50, 60, 80))
+                                .rounding(Rounding::same(8.0 * s))
+                                .min_size(Vec2::new(72.0 * s, 56.0 * s));
+                                if ui.add(zoom_out).clicked()
+                                    && !saving
+                                    && app.current_edit.zoom > 1.0
+                                {
+                                    app.current_edit.zoom = (app.current_edit.zoom / 1.2).max(1.0);
+                                }
 
-                // Text overlay preview
-                if !app.current_edit.text_overlay.is_empty() {
-                    let text_pos = egui::pos2(
-                        img_rect.min.x + app.current_edit.text_x * img_rect.width(),
-                        img_rect.min.y + app.current_edit.text_y * img_rect.height(),
+                                ui.label(
+                                    egui::RichText::new(format!("{:.1}x", app.current_edit.zoom))
+                                        .size(14.0 * s)
+                                        .color(text_mid),
+                                );
+
+                                // Zoom in
+                                let zoom_in = egui::Button::new(
+                                    egui::RichText::new("+")
+                                        .size(22.0 * s)
+                                        .strong()
+                                        .color(Color32::WHITE),
+                                )
+                                .fill(Color32::from_rgb(50, 60, 80))
+                                .rounding(Rounding::same(8.0 * s))
+                                .min_size(Vec2::new(72.0 * s, 56.0 * s));
+                                if ui.add(zoom_in).clicked()
+                                    && !saving
+                                    && app.current_edit.zoom < 5.0
+                                {
+                                    app.current_edit.zoom = (app.current_edit.zoom * 1.2).min(5.0);
+                                }
+
+                                ui.add_space(16.0 * s);
+
+                                // Rotate left
+                                let rot_left = egui::Button::new(
+                                    egui::RichText::new("↺")
+                                        .size(24.0 * s)
+                                        .color(Color32::WHITE),
+                                )
+                                .fill(Color32::from_rgb(50, 60, 80))
+                                .rounding(Rounding::same(8.0 * s))
+                                .min_size(Vec2::new(72.0 * s, 56.0 * s));
+                                if ui.add(rot_left).clicked() && !saving {
+                                    app.current_edit.rotation =
+                                        (app.current_edit.rotation + 270) % 360;
+                                }
+
+                                ui.add_space(6.0 * s);
+
+                                // Rotate right
+                                let rot_right = egui::Button::new(
+                                    egui::RichText::new("↻")
+                                        .size(24.0 * s)
+                                        .color(Color32::WHITE),
+                                )
+                                .fill(Color32::from_rgb(50, 60, 80))
+                                .rounding(Rounding::same(8.0 * s))
+                                .min_size(Vec2::new(72.0 * s, 56.0 * s));
+                                if ui.add(rot_right).clicked() && !saving {
+                                    app.current_edit.rotation =
+                                        (app.current_edit.rotation + 90) % 360;
+                                }
+
+                                ui.add_space(16.0 * s);
+
+                                // B&W toggle
+                                let bw_text = if app.current_edit.grayscale {
+                                    "B/W ✓"
+                                } else {
+                                    "B/W"
+                                };
+                                let bw_btn = egui::Button::new(
+                                    egui::RichText::new(bw_text)
+                                        .size(13.0 * s)
+                                        .color(Color32::WHITE),
+                                )
+                                .fill(if app.current_edit.grayscale {
+                                    Color32::from_rgb(0, 229, 255)
+                                } else {
+                                    Color32::from_rgb(50, 60, 80)
+                                })
+                                .rounding(Rounding::same(8.0 * s))
+                                .min_size(Vec2::new(100.0 * s, 56.0 * s));
+                                if ui.add(bw_btn).clicked() && !saving {
+                                    app.current_edit.grayscale = !app.current_edit.grayscale;
+                                }
+                            });
+                        },
                     );
-                    let font_size = (app.current_edit.text_size as f32)
-                        .min(img_h * 0.15)
-                        .max(12.0)
-                        * s;
-                    // Draw text shadow for readability
-                    for dx in [-1.0, 1.0] {
-                        for dy in [-1.0, 1.0] {
-                            painter.text(
-                                text_pos + Vec2::new(dx * 2.0 * s, dy * 2.0 * s),
-                                egui::Align2::CENTER_CENTER,
-                                &app.current_edit.text_overlay,
-                                egui::FontId::new(font_size, egui::FontFamily::Proportional),
-                                Color32::from_rgb(0, 0, 0),
+
+                    ui.add_space(gap);
+
+                    // CENTER: Image (centered vertically)
+                    ui.allocate_ui_with_layout(
+                        Vec2::new(img_max_w, main_h),
+                        egui::Layout::top_down(egui::Align::Center),
+                        |ui| {
+                            let top_space = (main_h
+                                - img_max_w.min(img_max_h * frame_aspect) / frame_aspect)
+                                * 0.5;
+                            ui.add_space(top_space.max(0.0));
+
+                            let img_w = img_max_w.min(img_max_h * frame_aspect);
+                            let img_h = img_w / frame_aspect;
+                            let (img_rect, img_response) = ui
+                                .allocate_exact_size(Vec2::new(img_w, img_h), egui::Sense::drag());
+
+                            // Handle drag-to-pan
+                            if img_response.dragged() && !saving {
+                                let delta = img_response.drag_delta();
+                                let sensitivity = 2.0 / app.current_edit.zoom.max(1.0);
+                                app.current_edit.pan_x -=
+                                    delta.x / (img_w.max(1.0) * 0.5) * sensitivity;
+                                app.current_edit.pan_y -=
+                                    delta.y / (img_h.max(1.0) * 0.5) * sensitivity;
+                                app.current_edit.pan_x = app.current_edit.pan_x.clamp(-1.0, 1.0);
+                                app.current_edit.pan_y = app.current_edit.pan_y.clamp(-1.0, 1.0);
+                            }
+
+                            let uvs = calculate_crop_uvs(
+                                tex_size.x,
+                                tex_size.y,
+                                frame_aspect,
+                                app.current_edit.zoom,
+                                app.current_edit.pan_x,
+                                app.current_edit.pan_y,
+                                app.current_edit.rotation,
                             );
-                        }
-                    }
-                    painter.text(
-                        text_pos,
-                        egui::Align2::CENTER_CENTER,
-                        &app.current_edit.text_overlay,
-                        egui::FontId::new(font_size, egui::FontFamily::Proportional),
-                        Color32::WHITE,
+
+                            let painter = ui.painter();
+                            painter.rect_filled(img_rect, 4.0 * s, Color32::from_rgb(0, 229, 255));
+                            draw_editable_image(painter, tex_id, img_rect, uvs, Color32::WHITE);
+                            draw_dashed_rect(
+                                painter,
+                                img_rect,
+                                Stroke::new(2.5 * s, Color32::from_rgb(255, 51, 102)),
+                                10.0 * s,
+                                6.0 * s,
+                            );
+
+                            // Text overlay preview
+                            if !app.current_edit.text_overlay.is_empty() {
+                                let text_pos = egui::pos2(
+                                    img_rect.min.x + app.current_edit.text_x * img_rect.width(),
+                                    img_rect.min.y + app.current_edit.text_y * img_rect.height(),
+                                );
+                                let font_size = (app.current_edit.text_size as f32)
+                                    .min(img_h * 0.15)
+                                    .max(12.0)
+                                    * s;
+                                for dx in [-1.0, 1.0] {
+                                    for dy in [-1.0, 1.0] {
+                                        painter.text(
+                                            text_pos + Vec2::new(dx * 2.0 * s, dy * 2.0 * s),
+                                            egui::Align2::CENTER_CENTER,
+                                            &app.current_edit.text_overlay,
+                                            egui::FontId::new(
+                                                font_size,
+                                                egui::FontFamily::Proportional,
+                                            ),
+                                            Color32::from_rgb(0, 0, 0),
+                                        );
+                                    }
+                                }
+                                painter.text(
+                                    text_pos,
+                                    egui::Align2::CENTER_CENTER,
+                                    &app.current_edit.text_overlay,
+                                    egui::FontId::new(font_size, egui::FontFamily::Proportional),
+                                    Color32::WHITE,
+                                );
+                            }
+                        },
                     );
-                }
+
+                    ui.add_space(gap);
+
+                    // RIGHT PANEL
+                    ui.allocate_ui_with_layout(
+                        Vec2::new(right_w, main_h),
+                        egui::Layout::top_down(egui::Align::Center),
+                        |ui| {
+                            let panel_rect = ui.max_rect();
+                            ui.painter().rect_filled(panel_rect, 8.0 * s, panel_bg);
+
+                            ui.vertical_centered(|ui| {
+                                ui.add_space(12.0 * s);
+
+                                ui.label(
+                                    egui::RichText::new("Text:").size(14.0 * s).color(text_mid),
+                                );
+                                ui.add_space(6.0 * s);
+
+                                let text_edit =
+                                    egui::TextEdit::singleline(&mut app.current_edit.text_overlay)
+                                        .font(egui::TextStyle::Body)
+                                        .hint_text("Skriv text...")
+                                        .desired_width(180.0 * s);
+                                ui.add(text_edit);
+
+                                ui.add_space(12.0 * s);
+
+                                // Arrow pad in cross layout
+                                ui.vertical(|ui| {
+                                    ui.horizontal(|ui| {
+                                        ui.add_space(60.0 * s);
+                                        let up_btn = egui::Button::new(
+                                            egui::RichText::new("▲")
+                                                .size(18.0 * s)
+                                                .color(Color32::WHITE),
+                                        )
+                                        .fill(Color32::from_rgb(50, 60, 80))
+                                        .rounding(Rounding::same(6.0 * s))
+                                        .min_size(Vec2::new(56.0 * s, 48.0 * s));
+                                        if ui.add(up_btn).clicked() && !saving {
+                                            app.current_edit.text_y =
+                                                (app.current_edit.text_y - 0.05).max(0.05);
+                                        }
+                                    });
+                                    ui.horizontal(|ui| {
+                                        let left_btn = egui::Button::new(
+                                            egui::RichText::new("◀")
+                                                .size(18.0 * s)
+                                                .color(Color32::WHITE),
+                                        )
+                                        .fill(Color32::from_rgb(50, 60, 80))
+                                        .rounding(Rounding::same(6.0 * s))
+                                        .min_size(Vec2::new(56.0 * s, 48.0 * s));
+                                        if ui.add(left_btn).clicked() && !saving {
+                                            app.current_edit.text_x =
+                                                (app.current_edit.text_x - 0.05).max(0.05);
+                                        }
+                                        ui.add_space(4.0 * s);
+                                        let down_btn = egui::Button::new(
+                                            egui::RichText::new("▼")
+                                                .size(18.0 * s)
+                                                .color(Color32::WHITE),
+                                        )
+                                        .fill(Color32::from_rgb(50, 60, 80))
+                                        .rounding(Rounding::same(6.0 * s))
+                                        .min_size(Vec2::new(56.0 * s, 48.0 * s));
+                                        if ui.add(down_btn).clicked() && !saving {
+                                            app.current_edit.text_y =
+                                                (app.current_edit.text_y + 0.05).min(0.95);
+                                        }
+                                        ui.add_space(4.0 * s);
+                                        let right_btn = egui::Button::new(
+                                            egui::RichText::new("▶")
+                                                .size(18.0 * s)
+                                                .color(Color32::WHITE),
+                                        )
+                                        .fill(Color32::from_rgb(50, 60, 80))
+                                        .rounding(Rounding::same(6.0 * s))
+                                        .min_size(Vec2::new(56.0 * s, 48.0 * s));
+                                        if ui.add(right_btn).clicked() && !saving {
+                                            app.current_edit.text_x =
+                                                (app.current_edit.text_x + 0.05).min(0.95);
+                                        }
+                                    });
+                                });
+
+                                ui.add_space(16.0 * s);
+
+                                // Text size
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "Storlek: {}",
+                                        app.current_edit.text_size
+                                    ))
+                                    .size(13.0 * s)
+                                    .color(text_mid),
+                                );
+                                ui.add_space(4.0 * s);
+                                ui.horizontal(|ui| {
+                                    ui.add_space(20.0 * s);
+                                    let txt_minus = egui::Button::new(
+                                        egui::RichText::new("−")
+                                            .size(16.0 * s)
+                                            .color(Color32::WHITE),
+                                    )
+                                    .fill(Color32::from_rgb(50, 60, 80))
+                                    .rounding(Rounding::same(6.0 * s))
+                                    .min_size(Vec2::new(56.0 * s, 48.0 * s));
+                                    if ui.add(txt_minus).clicked()
+                                        && !saving
+                                        && app.current_edit.text_size > 12
+                                    {
+                                        app.current_edit.text_size -= 4;
+                                    }
+                                    ui.add_space(4.0 * s);
+                                    let txt_plus = egui::Button::new(
+                                        egui::RichText::new("+")
+                                            .size(16.0 * s)
+                                            .color(Color32::WHITE),
+                                    )
+                                    .fill(Color32::from_rgb(50, 60, 80))
+                                    .rounding(Rounding::same(6.0 * s))
+                                    .min_size(Vec2::new(56.0 * s, 48.0 * s));
+                                    if ui.add(txt_plus).clicked()
+                                        && !saving
+                                        && app.current_edit.text_size < 200
+                                    {
+                                        app.current_edit.text_size += 4;
+                                    }
+                                });
+                            });
+                        },
+                    );
+                });
+
+                // ── Bottom bar ─────────────────────────────────────────────
+                ui.add_space(4.0 * s);
+                ui.horizontal(|ui| {
+                    let btn_h = 56.0 * s;
+
+                    // Left: paper size info
+                    ui.vertical(|ui| {
+                        ui.set_min_size(Vec2::new(200.0 * s, btn_h));
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "Format: {} · {}",
+                                paper_size,
+                                app.printer_for_current_size()
+                                    .unwrap_or(pack.no_printer_for_size)
+                            ))
+                            .size(13.0 * s)
+                            .color(text_mid),
+                        );
+                    });
+
+                    // Right: actions
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if saving {
+                            ui.horizontal(|ui| {
+                                let time = ui.ctx().input(|i| i.time);
+                                let spinner = ["◐", "◑", "◒", "◓"][(time * 4.0) as usize % 4];
+                                ui.label(
+                                    egui::RichText::new(spinner)
+                                        .size(28.0 * s)
+                                        .color(Color32::from_rgb(0, 229, 255)),
+                                );
+                                ui.add_space(8.0 * s);
+                                ui.label(
+                                    egui::RichText::new("Sparar...")
+                                        .size(14.0 * s)
+                                        .strong()
+                                        .color(text_dark),
+                                );
+                            });
+                        } else {
+                            let back_btn = egui::Button::new(
+                                egui::RichText::new("Tillbaka utan att spara")
+                                    .size(13.0 * s)
+                                    .color(text_mid),
+                            )
+                            .fill(Color32::from_rgb(30, 40, 60))
+                            .rounding(Rounding::same(10.0 * s))
+                            .min_size(Vec2::new(180.0 * s, btn_h));
+                            if ui.add(back_btn).clicked() {
+                                app.current_edit = crate::app::PhotoEdit::default();
+                                app.screen = AppScreen::Gallery;
+                            }
+
+                            ui.add_space(12.0 * s);
+
+                            let save_btn = egui::Button::new(
+                                egui::RichText::new("💾 Spara och gå tillbaka")
+                                    .size(16.0 * s)
+                                    .strong()
+                                    .color(Color32::WHITE),
+                            )
+                            .fill(Color32::from_rgb(0, 229, 255))
+                            .rounding(Rounding::same(12.0 * s))
+                            .min_size(Vec2::new(240.0 * s, btn_h));
+                            if ui.add(save_btn).clicked() {
+                                app.start_save_edit_thread();
+                            }
+                        }
+                    });
+                });
             } else {
                 ui.centered_and_justified(|ui| {
                     ui.label(egui::RichText::new("—").size(20.0 * s).color(text_mid));
                 });
             }
-
-            ui.add_space(4.0 * s);
-
-            // ── Controls ────────────────────────────────────────────────
-            ui.vertical_centered(|ui| {
-                ui.set_enabled(!app.save_in_progress);
-
-                // Row 1: Edit tools (touch-friendly)
-                ui.horizontal(|ui| {
-                    // Zoom out
-                    let zoom_out = egui::Button::new(
-                        egui::RichText::new("−")
-                            .size(20.0 * s)
-                            .strong()
-                            .color(Color32::WHITE),
-                    )
-                    .fill(Color32::from_rgb(50, 60, 80))
-                    .rounding(Rounding::same(8.0 * s))
-                    .min_size(Vec2::new(72.0 * s, 64.0 * s));
-                    if ui.add(zoom_out).clicked() && app.current_edit.zoom > 1.0 {
-                        app.current_edit.zoom = (app.current_edit.zoom / 1.2).max(1.0);
-                    }
-                    ui.label(
-                        egui::RichText::new(format!("{:.1}x", app.current_edit.zoom))
-                            .size(15.0 * s)
-                            .color(text_mid),
-                    );
-                    // Zoom in
-                    let zoom_in = egui::Button::new(
-                        egui::RichText::new("+")
-                            .size(20.0 * s)
-                            .strong()
-                            .color(Color32::WHITE),
-                    )
-                    .fill(Color32::from_rgb(50, 60, 80))
-                    .rounding(Rounding::same(8.0 * s))
-                    .min_size(Vec2::new(72.0 * s, 64.0 * s));
-                    if ui.add(zoom_in).clicked() && app.current_edit.zoom < 5.0 {
-                        app.current_edit.zoom = (app.current_edit.zoom * 1.2).min(5.0);
-                    }
-
-                    ui.add_space(16.0 * s);
-
-                    // Rotate left
-                    let rot_left = egui::Button::new(
-                        egui::RichText::new("↺ Vänster")
-                            .size(13.0 * s)
-                            .color(Color32::WHITE),
-                    )
-                    .fill(Color32::from_rgb(50, 60, 80))
-                    .rounding(Rounding::same(8.0 * s))
-                    .min_size(Vec2::new(120.0 * s, 64.0 * s));
-                    if ui.add(rot_left).clicked() {
-                        app.current_edit.rotation = (app.current_edit.rotation + 270) % 360;
-                    }
-                    // Rotate right
-                    let rot_right = egui::Button::new(
-                        egui::RichText::new("Höger ↻")
-                            .size(13.0 * s)
-                            .color(Color32::WHITE),
-                    )
-                    .fill(Color32::from_rgb(50, 60, 80))
-                    .rounding(Rounding::same(8.0 * s))
-                    .min_size(Vec2::new(120.0 * s, 64.0 * s));
-                    if ui.add(rot_right).clicked() {
-                        app.current_edit.rotation = (app.current_edit.rotation + 90) % 360;
-                    }
-
-                    ui.add_space(16.0 * s);
-
-                    // B&W toggle
-                    let bw_text = if app.current_edit.grayscale {
-                        "Svartvitt ✓"
-                    } else {
-                        "Svartvitt"
-                    };
-                    let bw_btn = egui::Button::new(
-                        egui::RichText::new(bw_text)
-                            .size(13.0 * s)
-                            .color(Color32::WHITE),
-                    )
-                    .fill(if app.current_edit.grayscale {
-                        Color32::from_rgb(0, 229, 255)
-                    } else {
-                        Color32::from_rgb(50, 60, 80)
-                    })
-                    .rounding(Rounding::same(8.0 * s))
-                    .min_size(Vec2::new(140.0 * s, 64.0 * s));
-                    if ui.add(bw_btn).clicked() {
-                        app.current_edit.grayscale = !app.current_edit.grayscale;
-                    }
-                });
-
-                ui.add_space(6.0 * s);
-
-                // Row 2: Text overlay
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("Text:").size(13.0 * s).color(text_mid));
-                    ui.add_space(4.0 * s);
-                    let text_edit = egui::TextEdit::singleline(&mut app.current_edit.text_overlay)
-                        .font(egui::TextStyle::Body)
-                        .hint_text("Skriv text här...")
-                        .desired_width(240.0 * s);
-                    ui.add(text_edit);
-                    ui.add_space(8.0 * s);
-
-                    // Text position arrows
-                    let up_btn = egui::Button::new(
-                        egui::RichText::new("▲")
-                            .size(16.0 * s)
-                            .color(Color32::WHITE),
-                    )
-                    .fill(Color32::from_rgb(50, 60, 80))
-                    .rounding(Rounding::same(6.0 * s))
-                    .min_size(Vec2::new(56.0 * s, 56.0 * s));
-                    if ui.add(up_btn).clicked() {
-                        app.current_edit.text_y = (app.current_edit.text_y - 0.05).max(0.05);
-                    }
-                    let down_btn = egui::Button::new(
-                        egui::RichText::new("▼")
-                            .size(16.0 * s)
-                            .color(Color32::WHITE),
-                    )
-                    .fill(Color32::from_rgb(50, 60, 80))
-                    .rounding(Rounding::same(6.0 * s))
-                    .min_size(Vec2::new(56.0 * s, 56.0 * s));
-                    if ui.add(down_btn).clicked() {
-                        app.current_edit.text_y = (app.current_edit.text_y + 0.05).min(0.95);
-                    }
-                    let left_btn = egui::Button::new(
-                        egui::RichText::new("◀")
-                            .size(16.0 * s)
-                            .color(Color32::WHITE),
-                    )
-                    .fill(Color32::from_rgb(50, 60, 80))
-                    .rounding(Rounding::same(6.0 * s))
-                    .min_size(Vec2::new(56.0 * s, 56.0 * s));
-                    if ui.add(left_btn).clicked() {
-                        app.current_edit.text_x = (app.current_edit.text_x - 0.05).max(0.05);
-                    }
-                    let right_btn = egui::Button::new(
-                        egui::RichText::new("▶")
-                            .size(16.0 * s)
-                            .color(Color32::WHITE),
-                    )
-                    .fill(Color32::from_rgb(50, 60, 80))
-                    .rounding(Rounding::same(6.0 * s))
-                    .min_size(Vec2::new(56.0 * s, 56.0 * s));
-                    if ui.add(right_btn).clicked() {
-                        app.current_edit.text_x = (app.current_edit.text_x + 0.05).min(0.95);
-                    }
-
-                    ui.add_space(8.0 * s);
-
-                    // Text size
-                    ui.label(
-                        egui::RichText::new(format!("Storlek: {}", app.current_edit.text_size))
-                            .size(12.0 * s)
-                            .color(text_mid),
-                    );
-                    let txt_minus = egui::Button::new(
-                        egui::RichText::new("−")
-                            .size(14.0 * s)
-                            .color(Color32::WHITE),
-                    )
-                    .fill(Color32::from_rgb(50, 60, 80))
-                    .rounding(Rounding::same(6.0 * s))
-                    .min_size(Vec2::new(48.0 * s, 48.0 * s));
-                    if ui.add(txt_minus).clicked() && app.current_edit.text_size > 12 {
-                        app.current_edit.text_size -= 4;
-                    }
-                    let txt_plus = egui::Button::new(
-                        egui::RichText::new("+")
-                            .size(14.0 * s)
-                            .color(Color32::WHITE),
-                    )
-                    .fill(Color32::from_rgb(50, 60, 80))
-                    .rounding(Rounding::same(6.0 * s))
-                    .min_size(Vec2::new(48.0 * s, 48.0 * s));
-                    if ui.add(txt_plus).clicked() && app.current_edit.text_size < 200 {
-                        app.current_edit.text_size += 4;
-                    }
-                });
-
-                ui.add_space(4.0 * s);
-
-                // Paper size label (read-only since single-size mode)
-                ui.label(
-                    egui::RichText::new(format!(
-                        "Format: {} · {}",
-                        paper_size,
-                        app.printer_for_current_size()
-                            .unwrap_or(pack.no_printer_for_size)
-                    ))
-                    .size(13.0 * s)
-                    .color(text_mid),
-                );
-
-                ui.add_space(12.0 * s);
-
-                // Actions: Save and Back
-                let btn_width = ui.available_width().min(360.0 * s);
-                // Saving spinner overlay
-                if app.save_in_progress {
-                    ui.vertical_centered(|ui| {
-                        ui.add_space(20.0 * s);
-                        let time = ui.ctx().input(|i| i.time);
-                        let spinner = ["◐", "◑", "◒", "◓"][(time * 4.0) as usize % 4];
-                        ui.label(
-                            egui::RichText::new(spinner)
-                                .size(48.0 * s)
-                                .color(Color32::from_rgb(0, 229, 255)),
-                        );
-                        ui.add_space(8.0 * s);
-                        ui.label(
-                            egui::RichText::new("Sparar...")
-                                .size(18.0 * s)
-                                .strong()
-                                .color(text_dark),
-                        );
-                    });
-                } else {
-                    let save_btn = egui::Button::new(
-                        egui::RichText::new("💾 Spara och gå tillbaka")
-                            .size(18.0 * s)
-                            .strong()
-                            .color(Color32::WHITE),
-                    )
-                    .fill(Color32::from_rgb(0, 229, 255))
-                    .rounding(Rounding::same(12.0 * s))
-                    .min_size(Vec2::new(btn_width, 72.0 * s));
-                    if ui.add(save_btn).clicked() {
-                        app.start_save_edit_thread();
-                    }
-
-                    ui.add_space(6.0 * s);
-
-                    let back_btn = egui::Button::new(
-                        egui::RichText::new("Tillbaka utan att spara")
-                            .size(14.0 * s)
-                            .color(text_mid),
-                    )
-                    .fill(Color32::from_rgb(30, 40, 60))
-                    .rounding(Rounding::same(10.0 * s))
-                    .min_size(Vec2::new(btn_width, 64.0 * s));
-                    if ui.add(back_btn).clicked() {
-                        app.current_edit = crate::app::PhotoEdit::default();
-                        app.screen = AppScreen::Gallery;
-                    }
-                }
-            });
         });
 }
 
@@ -1720,6 +1814,10 @@ fn draw_queue(ctx: &egui::Context, app: &mut ZalStudio) {
 fn draw_importing(ctx: &egui::Context, app: &mut ZalStudio) {
     let pack = l(app.lang);
     let s = touch_scale(ctx);
+    let text_dark = Color32::from_rgb(224, 247, 255);
+    let text_mid = Color32::from_rgb(142, 202, 230);
+    let blue_accent = Color32::from_rgb(0, 229, 255);
+
     // Keep spinner animating
     ctx.request_repaint();
     egui::CentralPanel::default()
@@ -1729,29 +1827,130 @@ fn draw_importing(ctx: &egui::Context, app: &mut ZalStudio) {
                 .inner_margin(20.0 * s),
         )
         .show(ctx, |ui| {
-            ui.centered_and_justified(|ui| {
-                ui.vertical_centered(|ui| {
-                    let time = ui.ctx().input(|i| i.time);
+            // Push content to vertical center
+            let est_content_h = 340.0 * s;
+            let top_pad = (ui.available_height() - est_content_h) * 0.5;
+            ui.add_space(top_pad.max(0.0));
+
+            ui.vertical_centered(|ui| {
+                let time = ui.ctx().input(|i| i.time);
+
+                // ── Big file counter ──────────────────────────────────────
+                if let Some((current, total)) = app.import_progress {
+                    if total > 0 {
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                egui::RichText::new(format!("{}", current))
+                                    .size(72.0 * s)
+                                    .strong()
+                                    .color(blue_accent),
+                            );
+                            ui.label(
+                                egui::RichText::new(format!(" / {}", total))
+                                    .size(28.0 * s)
+                                    .color(text_mid),
+                            );
+                        });
+                    } else {
+                        let spinner = ["◆", "▲", "◆", "▼"][(time * 3.0) as usize % 4];
+                        ui.label(
+                            egui::RichText::new(spinner)
+                                .size(56.0 * s)
+                                .color(blue_accent),
+                        );
+                    }
+                } else {
                     let spinner = ["◆", "▲", "◆", "▼"][(time * 3.0) as usize % 4];
                     ui.label(
                         egui::RichText::new(spinner)
                             .size(56.0 * s)
-                            .color(Color32::from_rgb(0, 229, 255)),
+                            .color(blue_accent),
                     );
-                    ui.add_space(20.0 * s);
+                }
+
+                ui.add_space(16.0 * s);
+
+                // ── Current filename ──────────────────────────────────────
+                if !app.import_current_file.is_empty() {
+                    let file_label = if app.import_current_file.len() > 30 {
+                        format!(
+                            "…{}",
+                            &app.import_current_file[app.import_current_file.len() - 30..]
+                        )
+                    } else {
+                        app.import_current_file.clone()
+                    };
                     ui.label(
-                        egui::RichText::new(pack.importing)
-                            .size(24.0 * s)
+                        egui::RichText::new(format!("📁 {}", file_label))
+                            .size(16.0 * s)
                             .strong()
-                            .color(Color32::WHITE),
+                            .color(text_dark),
                     );
-                    ui.add_space(10.0 * s);
+                }
+
+                ui.add_space(6.0 * s);
+
+                ui.label(
+                    egui::RichText::new(pack.importing)
+                        .size(18.0 * s)
+                        .color(text_mid),
+                );
+
+                ui.add_space(24.0 * s);
+
+                // ── Progress bar ──────────────────────────────────────────
+                let bar_width = ui.available_width().min(480.0 * s);
+                let bar_height = 28.0 * s;
+                let bar_rect = egui::Rect::from_center_size(
+                    ui.cursor().center_top() + egui::vec2(0.0, bar_height / 2.0),
+                    egui::vec2(bar_width, bar_height),
+                );
+                ui.painter()
+                    .rect_filled(bar_rect, 10.0 * s, Color32::from_rgb(30, 40, 60));
+
+                let fill_w = match app.import_progress {
+                    Some((current, total)) if total > 0 => {
+                        bar_width * (current as f32 / total as f32).min(1.0)
+                    }
+                    _ => {
+                        // Indeterminate: bounce back and forth
+                        let t = ((time as f32) * 1.5).sin() * 0.5 + 0.5;
+                        bar_width * 0.3_f32 + (bar_width * 0.7_f32) * t
+                    }
+                };
+                let fill_rect =
+                    egui::Rect::from_min_size(bar_rect.min, egui::vec2(fill_w, bar_height));
+                ui.painter().rect_filled(fill_rect, 10.0 * s, blue_accent);
+                ui.painter().rect_stroke(
+                    bar_rect,
+                    10.0 * s,
+                    Stroke::new(1.5 * s, Color32::from_rgb(50, 60, 80)),
+                );
+                ui.add_space(bar_height + 16.0 * s);
+
+                // ── Elapsed time + estimate ───────────────────────────────
+                let elapsed_secs = app
+                    .import_start_time
+                    .map(|t| t.elapsed().as_secs())
+                    .unwrap_or(0);
+                if elapsed_secs > 0 {
+                    let time_text = if let Some((current, total)) = app.import_progress {
+                        if current > 0 && total > 0 && elapsed_secs > 0 {
+                            let rate = current as f64 / elapsed_secs as f64;
+                            let remaining = ((total - current) as f64 / rate).max(0.0) as u64;
+                            format!("⏱ {}s  ·  ca {}s kvar", elapsed_secs, remaining)
+                        } else {
+                            format!("⏱ {}s", elapsed_secs)
+                        }
+                    } else {
+                        format!("⏱ {}s", elapsed_secs)
+                    };
                     ui.label(
-                        egui::RichText::new(&app.import_status)
-                            .size(18.0 * s)
-                            .color(Color32::from_rgb(142, 202, 230)),
+                        egui::RichText::new(time_text)
+                            .size(13.0 * s)
+                            .color(text_mid),
                     );
-                });
+                }
             });
         });
 }
@@ -2145,88 +2344,6 @@ fn draw_mobile_upload(ctx: &egui::Context, app: &mut ZalStudio) {
 
 // =============================================================================
 // PHONE FOLDER SELECT SCREEN (Windows — pick a folder before loading photos)
-// =============================================================================
-#[cfg(windows)]
-fn draw_phone_folder_select(ctx: &egui::Context, app: &mut ZalStudio) {
-    let pack = l(app.lang);
-    let s = touch_scale(ctx);
-    egui::CentralPanel::default()
-        .frame(
-            Frame::none()
-                .fill(Color32::from_rgb(10, 15, 26))
-                .inner_margin(16.0 * s),
-        )
-        .show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                if nav_button(ui, "<", s).clicked() {
-                    app.screen = AppScreen::MobileMenu;
-                    #[cfg(windows)]
-                    {
-                        app.mtp_cmd_tx = None;
-                        app.mtp_res_rx = None;
-                    }
-                }
-            });
-
-            ui.add_space(8.0 * s);
-            ui.label(
-                egui::RichText::new(pack.phone_folders_title)
-                    .size(20.0 * s)
-                    .strong()
-                    .color(Color32::WHITE),
-            );
-            ui.add_space(4.0 * s);
-            ui.label(
-                egui::RichText::new(pack.phone_folders_hint)
-                    .size(12.0 * s)
-                    .color(Color32::from_rgb(120, 140, 160)),
-            );
-            ui.add_space(12.0 * s);
-
-            let non_empty: Vec<_> = app
-                .mtp_folders
-                .iter()
-                .filter(|f| f.item_count > 0)
-                .cloned()
-                .collect();
-            if non_empty.is_empty() {
-                ui.label(
-                    egui::RichText::new("Inga bildmappar hittades i DCIM")
-                        .size(13.0 * s)
-                        .color(Color32::from_rgb(180, 200, 220)),
-                );
-            } else {
-                egui::ScrollArea::vertical()
-                    .auto_shrink([false; 2])
-                    .show(ui, |ui| {
-                        for folder in &non_empty {
-                            let btn = egui::Button::new(
-                                egui::RichText::new(format!(
-                                    "📁 {}  ({} bilder)",
-                                    folder.name, folder.item_count
-                                ))
-                                .size(14.0 * s)
-                                .strong()
-                                .color(Color32::WHITE),
-                            )
-                            .fill(Color32::from_rgb(13, 19, 33))
-                            .rounding(Rounding::same(10.0 * s))
-                            .min_size(Vec2::new(ui.available_width(), 52.0 * s));
-
-                            if ui.add(btn).clicked() {
-                                let path = folder.full_path.clone();
-                                app.open_phone_folder(path);
-                            }
-                            ui.add_space(6.0 * s);
-                        }
-                    });
-            }
-        });
-}
-
-#[cfg(not(windows))]
-fn draw_phone_folder_select(_ctx: &egui::Context, _app: &mut ZalStudio) {}
-
 // =============================================================================
 // GOOGLE PHOTOS AUTH SCREEN — QR code login
 // =============================================================================
@@ -2797,13 +2914,18 @@ fn draw_print_progress(ctx: &egui::Context, app: &mut ZalStudio) {
                         ui.cursor().center_top() + egui::vec2(0.0, bar_height / 2.0),
                         egui::vec2(bar_width, bar_height),
                     );
-                    ui.painter().rect_filled(bar_rect, 8.0 * s, Color32::from_rgb(30, 40, 60));
+                    ui.painter()
+                        .rect_filled(bar_rect, 8.0 * s, Color32::from_rgb(30, 40, 60));
                     let fill_rect = egui::Rect::from_min_size(
                         bar_rect.min,
                         egui::vec2(bar_width * progress, bar_height),
                     );
                     ui.painter().rect_filled(fill_rect, 8.0 * s, blue_accent);
-                    ui.painter().rect_stroke(bar_rect, 8.0 * s, Stroke::new(1.0 * s, Color32::from_rgb(50, 60, 80)));
+                    ui.painter().rect_stroke(
+                        bar_rect,
+                        8.0 * s,
+                        Stroke::new(1.0 * s, Color32::from_rgb(50, 60, 80)),
+                    );
                     ui.add_space(bar_height + 12.0 * s);
 
                     ui.label(
@@ -2819,19 +2941,30 @@ fn draw_print_progress(ctx: &egui::Context, app: &mut ZalStudio) {
                     for printer in &app.printers {
                         for job in printer.jobs() {
                             let (icon, color, status_text) = match &job.status {
-                                crate::printer::JobStatus::Queued => ("⏳", text_mid, pack.print_progress_queued),
-                                crate::printer::JobStatus::Printing => ("🖨", blue_accent, pack.print_progress_printing),
-                                crate::printer::JobStatus::Done => ("✅", green_ok, pack.print_progress_done),
-                                crate::printer::JobStatus::Failed(_) => ("❌", red_err, pack.print_progress_failed),
+                                crate::printer::JobStatus::Queued => {
+                                    ("⏳", text_mid, pack.print_progress_queued)
+                                }
+                                crate::printer::JobStatus::Printing => {
+                                    ("🖨", blue_accent, pack.print_progress_printing)
+                                }
+                                crate::printer::JobStatus::Done => {
+                                    ("✅", green_ok, pack.print_progress_done)
+                                }
+                                crate::printer::JobStatus::Failed(_) => {
+                                    ("❌", red_err, pack.print_progress_failed)
+                                }
                             };
                             let file = std::path::Path::new(&job.photo_path)
                                 .file_name()
                                 .unwrap_or_default()
                                 .to_string_lossy();
                             ui.label(
-                                egui::RichText::new(format!("{}  {} — {}", icon, file, status_text))
-                                    .size(14.0 * s)
-                                    .color(color),
+                                egui::RichText::new(format!(
+                                    "{}  {} — {}",
+                                    icon, file, status_text
+                                ))
+                                .size(14.0 * s)
+                                .color(color),
                             );
                         }
                     }
@@ -3955,9 +4088,12 @@ fn draw_settings(ctx: &egui::Context, app: &mut ZalStudio) {
                         );
                     } else {
                         ui.label(
-                            egui::RichText::new(format!("{} utskrifter sparade (max 30)", entries.len()))
-                                .size(13.0 * s)
-                                .color(text_mid),
+                            egui::RichText::new(format!(
+                                "{} utskrifter sparade (max 30)",
+                                entries.len()
+                            ))
+                            .size(13.0 * s)
+                            .color(text_mid),
                         );
                         ui.add_space(8.0 * s);
 
@@ -4018,28 +4154,39 @@ fn draw_settings(ctx: &egui::Context, app: &mut ZalStudio) {
                                             });
                                         });
 
-                                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                            if ui
-                                                .add_sized(
-                                                    Vec2::new(100.0 * s, 40.0 * s),
-                                                    egui::Button::new(
-                                                        egui::RichText::new("🖨  Skriv ut igen")
-                                                            .size(12.0 * s)
-                                                            .strong()
-                                                            .color(Color32::WHITE),
+                                        ui.with_layout(
+                                            egui::Layout::right_to_left(egui::Align::Center),
+                                            |ui| {
+                                                if ui
+                                                    .add_sized(
+                                                        Vec2::new(100.0 * s, 40.0 * s),
+                                                        egui::Button::new(
+                                                            egui::RichText::new("🖨  Skriv ut igen")
+                                                                .size(12.0 * s)
+                                                                .strong()
+                                                                .color(Color32::WHITE),
+                                                        )
+                                                        .fill(Color32::from_rgb(0, 153, 170))
+                                                        .rounding(Rounding::same(8.0 * s)),
                                                     )
-                                                    .fill(Color32::from_rgb(0, 153, 170))
-                                                    .rounding(Rounding::same(8.0 * s)),
-                                                )
-                                                .clicked()
-                                            {
-                                                if let Err(e) = app.reprint_from_history(&entry.folder_path) {
-                                                    app.show_toast_long(format!("Utskrift misslyckades: {}", e));
-                                                } else {
-                                                    app.show_toast(format!("{} skickad till skrivaren igen", entry.record.photo_name));
+                                                    .clicked()
+                                                {
+                                                    if let Err(e) =
+                                                        app.reprint_from_history(&entry.folder_path)
+                                                    {
+                                                        app.show_toast_long(format!(
+                                                            "Utskrift misslyckades: {}",
+                                                            e
+                                                        ));
+                                                    } else {
+                                                        app.show_toast(format!(
+                                                            "{} skickad till skrivaren igen",
+                                                            entry.record.photo_name
+                                                        ));
+                                                    }
                                                 }
-                                            }
-                                        });
+                                            },
+                                        );
                                     });
                                 });
                                 ui.add_space(8.0 * s);

@@ -41,7 +41,11 @@ pub fn find_mounted_devices() -> Vec<PathBuf> {
 
 /// Importera bilder från USB / kameraminne / kortläsare
 /// Försöker först hitta DCIM-mappar (kamerastruktur), annars alla bilder
-pub fn import_from_storage(source_dir: &Path, dest_dir: &Path) -> Result<usize, String> {
+pub fn import_from_storage(
+    source_dir: &Path,
+    dest_dir: &Path,
+    progress: Option<&dyn Fn(usize, usize, &str)>,
+) -> Result<usize, String> {
     // Om source_dir inte finns, försök hitta monterade enheter
     if !source_dir.exists() || source_dir == Path::new("/media") {
         let devices = find_mounted_devices();
@@ -52,7 +56,7 @@ pub fn import_from_storage(source_dir: &Path, dest_dir: &Path) -> Result<usize, 
         let mut total = 0;
         let mut found_any = false;
         for device in devices {
-            match import_from_storage_single(&device, dest_dir) {
+            match import_from_storage_single(&device, dest_dir, progress) {
                 Ok(count) => {
                     total += count;
                     found_any = true;
@@ -67,10 +71,14 @@ pub fn import_from_storage(source_dir: &Path, dest_dir: &Path) -> Result<usize, 
         return Ok(total);
     }
 
-    import_from_storage_single(source_dir, dest_dir)
+    import_from_storage_single(source_dir, dest_dir, progress)
 }
 
-fn import_from_storage_single(source_dir: &Path, dest_dir: &Path) -> Result<usize, String> {
+fn import_from_storage_single(
+    source_dir: &Path,
+    dest_dir: &Path,
+    progress: Option<&dyn Fn(usize, usize, &str)>,
+) -> Result<usize, String> {
     if !source_dir.exists() {
         return Err(format!("Sökvägen hittades inte: {}", source_dir.display()));
     }
@@ -88,54 +96,86 @@ fn import_from_storage_single(source_dir: &Path, dest_dir: &Path) -> Result<usiz
 
     if dcim_paths.is_empty() {
         // Fallback: skanna hela enheten efter bilder
-        copy_images(source_dir, dest_dir, false)
+        copy_images(source_dir, dest_dir, false, progress)
     } else {
         let mut total = 0;
         for dcim in dcim_paths {
-            total += copy_images(&dcim, dest_dir, false)?;
+            total += copy_images(&dcim, dest_dir, false, progress)?;
         }
         Ok(total)
     }
 }
 
-fn copy_images(source: &Path, dest: &Path, overwrite: bool) -> Result<usize, String> {
+fn copy_images(
+    source: &Path,
+    dest: &Path,
+    overwrite: bool,
+    progress: Option<&dyn Fn(usize, usize, &str)>,
+) -> Result<usize, String> {
     let _ = fs::create_dir_all(dest);
 
-    let mut copied = 0;
-    for entry in WalkDir::new(source)
+    // First pass: collect all image files to get a total count
+    let files: Vec<std::path::PathBuf> = WalkDir::new(source)
         .max_depth(4)
         .into_iter()
         .filter_map(|e| e.ok())
-    {
-        let path = entry.path();
-        if path.is_file() {
-            if let Some(ext) = path.extension() {
-                let ext = ext.to_string_lossy().to_lowercase();
-                if IMAGE_EXTS.contains(&ext.as_str()) {
-                    let file_name = path.file_name().unwrap_or_default();
-                    let dest_path = dest.join(file_name);
-                    let src_size = entry.metadata().map(|m| m.len()).unwrap_or(0);
-
-                    if !dest_path.exists() || overwrite {
-                        if fs::copy(path, dest_path).is_ok() {
-                            copied += 1;
-                        }
-                    } else {
-                        // Skip if already exists with same size
-                        let dest_size = fs::metadata(&dest_path).map(|m| m.len()).unwrap_or(0);
-                        if src_size == dest_size {
-                            continue;
-                        }
-                        // Byt namn om konflikt
-                        let stem = path.file_stem().unwrap_or_default().to_string_lossy();
-                        let new_name = format!("{}_{}.{}", stem, copied, ext);
-                        let dest_path = dest.join(&new_name);
-                        if fs::copy(path, dest_path).is_ok() {
-                            copied += 1;
-                        }
-                    }
-                }
+        .filter(|e| {
+            let path = e.path();
+            if !path.is_file() {
+                return false;
             }
+            path.extension()
+                .and_then(|e| e.to_str())
+                .map(|e| IMAGE_EXTS.contains(&e.to_lowercase().as_str()))
+                .unwrap_or(false)
+        })
+        .map(|e| e.path().to_path_buf())
+        .collect();
+
+    let total = files.len();
+    let mut copied = 0;
+    for path in files {
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        let file_name = path.file_name().unwrap_or_default();
+        let dest_path = dest.join(file_name);
+        let src_size = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+
+        if !dest_path.exists() || overwrite {
+            if fs::copy(&path, &dest_path).is_ok() {
+                copied += 1;
+            }
+        } else {
+            // Skip if already exists with same size
+            let dest_size = fs::metadata(&dest_path).map(|m| m.len()).unwrap_or(0);
+            if src_size == dest_size {
+                if let Some(ref cb) = progress {
+                    let fname = path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_else(|| "unknown".to_string());
+                    cb(copied, total, &fname);
+                }
+                continue;
+            }
+            // Byt namn om konflikt
+            let stem = path.file_stem().unwrap_or_default().to_string_lossy();
+            let new_name = format!("{}_{}.{}", stem, copied, ext);
+            let dest_path = dest.join(&new_name);
+            if fs::copy(&path, &dest_path).is_ok() {
+                copied += 1;
+            }
+        }
+
+        if let Some(ref cb) = progress {
+            let fname = path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+            cb(copied, total, &fname);
         }
     }
 

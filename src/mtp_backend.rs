@@ -29,7 +29,14 @@ pub enum MtpCommand {
 #[derive(Debug, Clone)]
 pub enum MtpResult {
     Photos(Vec<MtpPhoto>),
-    Downloaded { count: usize },
+    Progress {
+        current: usize,
+        total: usize,
+        file_name: String,
+    },
+    Downloaded {
+        count: usize,
+    },
     Error(String),
 }
 
@@ -119,8 +126,14 @@ pub fn spawn_mtp_worker() -> (Sender<MtpCommand>, Receiver<MtpResult>) {
                             continue;
                         };
 
+                        let total = to_download.len();
                         let mut count = 0;
-                        for photo in to_download {
+                        for (i, photo) in to_download.iter().enumerate() {
+                            let _ = res_tx.send(MtpResult::Progress {
+                                current: i + 1,
+                                total,
+                                file_name: photo.filename.clone(),
+                            });
                             let storage = match dev.storage(StorageId(photo.storage_id)).await {
                                 Ok(s) => s,
                                 Err(_) => continue,

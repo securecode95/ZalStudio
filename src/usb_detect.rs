@@ -25,6 +25,12 @@ pub enum UsbResult {
     FoundPhotos(Vec<crate::wired_import::PhonePhoto>),
     /// Copy complete — UI should switch to Gallery
     Imported(usize),
+    /// Progress update during copy (current, total, current_file_name)
+    Progress {
+        current: usize,
+        total: usize,
+        file_name: String,
+    },
     /// Something failed
     Error(String),
 }
@@ -379,7 +385,15 @@ fn import_and_report(
     // Tell the UI we found the device and are about to copy
     let _ = tx.send(UsbResult::Mounted(source.to_path_buf()));
 
-    match crate::import::import_from_storage(source, dest) {
+    let progress = |current: usize, total: usize, file_name: &str| {
+        let _ = tx.send(UsbResult::Progress {
+            current,
+            total,
+            file_name: file_name.to_string(),
+        });
+    };
+
+    match crate::import::import_from_storage(source, dest, Some(&progress)) {
         Ok(count) => {
             let _ = tx.send(UsbResult::Imported(count));
             ImportOutcome::Done

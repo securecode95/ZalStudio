@@ -27,7 +27,6 @@ pub enum AppScreen {
     MobileMenu,
     UsbPlugWait,
     PhoneConnecting,
-    PhoneFolderSelect,
     WiredPhonePicker,
     GoogleDriveAuth,
     GoogleDrivePicker,
@@ -137,6 +136,10 @@ pub struct ZalStudio {
     pub printers: Vec<Printer>,
     pub print_jobs: Vec<PrintJob>,
     pub print_done_timer: f32,
+    /// Import progress: (current_file, total_files) — None for indeterminate
+    pub import_progress: Option<(usize, usize)>,
+    pub import_current_file: String,
+    pub import_start_time: Option<Instant>,
     pub print_progress_total: usize,
     pub print_progress_done: usize,
     pub print_progress_failed: usize,
@@ -174,6 +177,10 @@ pub struct ZalStudio {
 
     // Thumbnail background loader
     pub thumb_rx: Option<Receiver<(String, egui::ColorImage)>>,
+
+    // Full-res preview background loader
+    pub full_res_rx: Option<Receiver<(String, egui::ColorImage)>>,
+    pub full_res_loading_path: Option<PathBuf>,
 
     // Save-edit background worker
     pub save_rx: Option<Receiver<Result<(), String>>>,
@@ -347,6 +354,9 @@ impl ZalStudio {
             printers,
             print_jobs: Vec::new(),
             print_done_timer: 5.0,
+            import_progress: None,
+            import_current_file: String::new(),
+            import_start_time: None,
             print_progress_total: 0,
             print_progress_done: 0,
             print_progress_failed: 0,
@@ -368,6 +378,8 @@ impl ZalStudio {
             previous_wifi_conn: None,
             usb_rx: None,
             thumb_rx: None,
+            full_res_rx: None,
+            full_res_loading_path: None,
             save_rx: None,
             save_in_progress: false,
             phone_type: PhoneType::Android,
@@ -441,9 +453,25 @@ impl ZalStudio {
         self.textures.get(&key)
     }
 
-    pub fn selected_texture(&mut self, ctx: &Context) -> Option<&TextureHandle> {
+    pub fn selected_texture(&mut self, _ctx: &Context) -> Option<&TextureHandle> {
         let path = self.photos.get(self.selected_photo)?.path.clone();
-        self.texture_for(ctx, &path)
+        let key = format!("full_res:{}", path.to_string_lossy());
+        if self.textures.contains_key(&key) {
+            return self.textures.get(&key);
+        }
+        // Start background loading if not already in progress for this image
+        let already_loading = self.full_res_loading_path.as_ref() == Some(&path);
+        if !already_loading && self.full_res_rx.is_none() {
+            self.full_res_loading_path = Some(path.clone());
+            let (tx, rx) = channel::<(String, egui::ColorImage)>();
+            self.full_res_rx = Some(rx);
+            std::thread::spawn(move || {
+                if let Some(color_image) = load_full_res_color_image(&path) {
+                    let _ = tx.send((key, color_image));
+                }
+            });
+        }
+        None
     }
 
     // ========================================================================
@@ -560,6 +588,8 @@ impl ZalStudio {
             crate::usb_detect::UsbResult::Mounted(path) => {
                 self.screen = AppScreen::Importing;
                 self.import_status = format!("Importerar från {}...", path.display());
+                self.import_progress = Some((0, 0));
+                self.import_start_time = Some(Instant::now());
             }
             crate::usb_detect::UsbResult::FoundPhotos(photos) => {
                 self.usb_rx = None;
@@ -570,8 +600,19 @@ impl ZalStudio {
                 self.spawn_thumbnail_worker(photos);
                 self.screen = AppScreen::WiredPhonePicker;
             }
+            crate::usb_detect::UsbResult::Progress {
+                current,
+                total,
+                file_name,
+            } => {
+                self.import_progress = Some((current, total));
+                self.import_current_file = file_name;
+            }
             crate::usb_detect::UsbResult::Imported(count) => {
                 self.usb_rx = None;
+                self.import_progress = None;
+                self.import_current_file.clear();
+                self.import_start_time = None;
                 self.import_status = format!("{} bilder importerade", count);
                 eprintln!("[IMPORT] Starting rescan after import...");
                 self.rescan();
@@ -582,6 +623,9 @@ impl ZalStudio {
             }
             crate::usb_detect::UsbResult::Error(e) => {
                 self.usb_rx = None;
+                self.import_progress = None;
+                self.import_current_file.clear();
+                self.import_start_time = None;
                 self.import_status = e.clone();
                 self.show_toast_long(e);
                 self.screen = AppScreen::SourceSelect;
@@ -963,7 +1007,12 @@ impl ZalStudio {
 
         let printer_name = match self.config.printer_for_size(&record.paper_size) {
             Some(name) => name,
-            None => return Err(format!("Ingen skrivare konfigurerad för {}", record.paper_size)),
+            None => {
+                return Err(format!(
+                    "Ingen skrivare konfigurerad för {}",
+                    record.paper_size
+                ));
+            }
         };
 
         let printer = match self.printers.iter_mut().find(|p| p.name() == printer_name) {
@@ -1115,6 +1164,14 @@ impl ZalStudio {
         }
         for result in mtp_results {
             match result {
+                MtpResult::Progress {
+                    current,
+                    total,
+                    file_name,
+                } => {
+                    self.import_progress = Some((current, total));
+                    self.import_current_file = file_name;
+                }
                 MtpResult::Photos(photos) => {
                     self.mtp_raw_photos = photos.clone();
                     self.mtp_photos = photos
@@ -1129,6 +1186,9 @@ impl ZalStudio {
                     self.screen = AppScreen::WiredPhonePicker;
                 }
                 MtpResult::Downloaded { count } => {
+                    self.import_progress = None;
+                    self.import_current_file.clear();
+                    self.import_start_time = None;
                     self.import_status = format!("{} bilder importerade", count);
                     self.rescan();
                     self.enter_preview_for_imported();
@@ -1137,6 +1197,9 @@ impl ZalStudio {
                     self.mtp_res_rx = None;
                 }
                 MtpResult::Error(e) => {
+                    self.import_progress = None;
+                    self.import_current_file.clear();
+                    self.import_start_time = None;
                     self.show_toast_long(format!("Fel: {}", e));
                     self.screen = AppScreen::MobileMenu;
                     self.mtp_cmd_tx = None;
@@ -1172,10 +1235,6 @@ impl ZalStudio {
         }
     }
 
-    pub fn open_phone_folder(&mut self, _folder_path: String) {
-        // No-op on Linux — native MTP does not use folder selection
-    }
-
     pub fn import_selected_phone_photos(&mut self) {
         if self.mtp_cmd_tx.is_some() && !self.mtp_raw_photos.is_empty() {
             // Native MTP download
@@ -1195,6 +1254,8 @@ impl ZalStudio {
                     });
                     self.screen = AppScreen::Importing;
                     self.import_status = "Laddar ner bilder...".to_string();
+                    self.import_progress = Some((0, 0));
+                    self.import_start_time = Some(Instant::now());
                 }
             }
         } else {
@@ -1210,6 +1271,8 @@ impl ZalStudio {
             if !selected.is_empty() {
                 self.screen = AppScreen::Importing;
                 self.import_status = "Importerar valda bilder...".to_string();
+                self.import_progress = Some((0, 0));
+                self.import_start_time = Some(Instant::now());
                 let dest = self.config.temp_directory.clone();
                 let (tx, rx) = channel::<crate::usb_detect::UsbResult>();
                 let selected_owned: Vec<crate::wired_import::PhonePhoto> =
@@ -1219,22 +1282,21 @@ impl ZalStudio {
                     // Clean out previous temp imports so the gallery stays manageable
                     eprintln!("[IMPORT-THREAD] Clearing old temp imports...");
                     let _ = crate::wired_import::clear_temp_imports(&dest);
-                    eprintln!(
-                        "[IMPORT-THREAD] Copying {} selected photos...",
-                        selected_owned.len()
-                    );
+                    let total = selected_owned.len();
+                    eprintln!("[IMPORT-THREAD] Copying {} selected photos...", total);
                     let mut count = 0;
-                    for photo in &selected_owned {
+                    for (i, photo) in selected_owned.iter().enumerate() {
+                        let _ = tx.send(crate::usb_detect::UsbResult::Progress {
+                            current: i + 1,
+                            total,
+                            file_name: photo.file_name.clone(),
+                        });
                         let dest_path = dest.join(&photo.file_name);
                         if std::fs::copy(&photo.path, &dest_path).is_ok() {
                             count += 1;
                         }
                     }
-                    eprintln!(
-                        "[IMPORT-THREAD] Done, copied {}/{} files",
-                        count,
-                        selected_owned.len()
-                    );
+                    eprintln!("[IMPORT-THREAD] Done, copied {}/{} files", count, total);
                     let _ = tx.send(crate::usb_detect::UsbResult::Imported(count));
                 });
                 self.usb_rx = Some(rx);
@@ -1304,14 +1366,18 @@ impl ZalStudio {
 
             self.screen = AppScreen::Importing;
             self.import_status = "Laddar ner från Drive...".to_string();
+            self.import_progress = Some((0, 0));
+            self.import_start_time = Some(Instant::now());
             let token = token.clone();
             let dest = self.config.temp_directory.clone();
             let tx = self.qr_tx.clone();
 
             std::thread::spawn(move || {
+                let total = selected.len();
                 let mut count = 0;
-                for file_id in selected {
-                    match crate::google_drive::download_drive_file(&file_id, &token, &dest) {
+                for (i, file_id) in selected.iter().enumerate() {
+                    let _ = tx.send(format!("PROGRESS:{}:{}:Drive fil {}", i + 1, total, i + 1));
+                    match crate::google_drive::download_drive_file(file_id, &token, &dest) {
                         Ok(_) => count += 1,
                         Err(e) => eprintln!("[Drive download] {}", e),
                     }
@@ -1333,14 +1399,18 @@ impl ZalStudio {
 
             self.screen = AppScreen::Importing;
             self.import_status = "Laddar ner från Google Foto...".to_string();
+            self.import_progress = Some((0, 0));
+            self.import_start_time = Some(Instant::now());
             let token = token.clone();
             let dest = self.config.temp_directory.clone();
             let tx = self.qr_tx.clone();
 
             std::thread::spawn(move || {
+                let total = selected.len();
                 let mut count = 0;
-                for photo_id in selected {
-                    match crate::google_drive::download_google_photo(&token, &photo_id, &dest) {
+                for (i, photo_id) in selected.iter().enumerate() {
+                    let _ = tx.send(format!("PROGRESS:{}:{}:Foto {}", i + 1, total, i + 1));
+                    match crate::google_drive::download_google_photo(&token, photo_id, &dest) {
                         Ok(_) => count += 1,
                         Err(e) => eprintln!("[Photos download] {}", e),
                     }
@@ -1377,14 +1447,19 @@ impl eframe::App for ZalStudio {
                             done += 1;
                             // Update history status to done
                             if let Some(folder) = self.history_job_map.get(&job.id) {
-                                let _ = crate::print_history::update_print_status(folder, "done", None);
+                                let _ =
+                                    crate::print_history::update_print_status(folder, "done", None);
                             }
                         }
                         JobStatus::Failed(e) => {
                             failed += 1;
                             eprintln!("[PRINT] Job {} failed: {}", job.id, e);
                             if let Some(folder) = self.history_job_map.get(&job.id) {
-                                let _ = crate::print_history::update_print_status(folder, "failed", Some(e));
+                                let _ = crate::print_history::update_print_status(
+                                    folder,
+                                    "failed",
+                                    Some(e),
+                                );
                             }
                         }
                         JobStatus::Queued => queued += 1,
@@ -1396,8 +1471,14 @@ impl eframe::App for ZalStudio {
             self.print_progress_failed = failed;
 
             let total = self.print_progress_total;
-            let elapsed = self.print_progress_start.map(|t| t.elapsed().as_secs_f32()).unwrap_or(0.0);
-            eprintln!("[PRINT-PROGRESS] total={}, done={}, failed={}, elapsed={:.1}s", total, done, failed, elapsed);
+            let elapsed = self
+                .print_progress_start
+                .map(|t| t.elapsed().as_secs_f32())
+                .unwrap_or(0.0);
+            eprintln!(
+                "[PRINT-PROGRESS] total={}, done={}, failed={}, elapsed={:.1}s",
+                total, done, failed, elapsed
+            );
 
             // Must show progress for at least 2 seconds so user can see it
             let all_done = done + failed >= total && total > 0;
@@ -1435,8 +1516,19 @@ impl eframe::App for ZalStudio {
         // Check for QR code updates
         if self.qr_texture.is_none() {
             while let Ok(url) = self.qr_rx.try_recv() {
-                if url.starts_with("DOWNLOADED:") {
+                if url.starts_with("PROGRESS:") {
+                    let parts: Vec<&str> = url.trim_start_matches("PROGRESS:").split(':').collect();
+                    if parts.len() >= 3 {
+                        if let (Ok(current), Ok(total)) = (parts[0].parse(), parts[1].parse()) {
+                            self.import_progress = Some((current, total));
+                            self.import_current_file = parts[2].to_string();
+                        }
+                    }
+                } else if url.starts_with("DOWNLOADED:") {
                     let count: usize = url.trim_start_matches("DOWNLOADED:").parse().unwrap_or(0);
+                    self.import_progress = None;
+                    self.import_current_file.clear();
+                    self.import_start_time = None;
                     self.import_status = format!("{} bilder importerade", count);
                     self.rescan();
                     self.enter_preview_for_imported();
@@ -1526,7 +1618,18 @@ impl eframe::App for ZalStudio {
             }
             for result in mtp_results {
                 match result {
+                    MtpResult::Progress {
+                        current,
+                        total,
+                        file_name,
+                    } => {
+                        self.import_progress = Some((current, total));
+                        self.import_current_file = file_name;
+                    }
                     MtpResult::Downloaded { count } => {
+                        self.import_progress = None;
+                        self.import_current_file.clear();
+                        self.import_start_time = None;
                         self.import_status = format!("{} bilder importerade", count);
                         self.rescan();
                         self.enter_preview_for_imported();
@@ -1535,6 +1638,9 @@ impl eframe::App for ZalStudio {
                         self.mtp_res_rx = None;
                     }
                     MtpResult::Error(e) => {
+                        self.import_progress = None;
+                        self.import_current_file.clear();
+                        self.import_start_time = None;
                         self.show_toast_long(format!("Fel: {}", e));
                         self.screen = AppScreen::Gallery;
                         self.mtp_cmd_tx = None;
@@ -1555,6 +1661,21 @@ impl eframe::App for ZalStudio {
             }
         }
         if thumbs_received > 0 {
+            ctx.request_repaint();
+        }
+
+        // Poll full-res preview background loader
+        let mut full_res_received = 0;
+        if let Some(ref rx) = self.full_res_rx {
+            while let Ok((key, color_image)) = rx.try_recv() {
+                let tex = ctx.load_texture(&key, color_image, egui::TextureOptions::default());
+                self.textures.insert(key, tex);
+                full_res_received += 1;
+            }
+        }
+        if full_res_received > 0 {
+            self.full_res_rx = None;
+            self.full_res_loading_path = None;
             ctx.request_repaint();
         }
 
@@ -1603,6 +1724,25 @@ fn paper_size_aspect(size: &str) -> f32 {
 
 /// Apply rotation, grayscale, zoom-crop to an image and save to temp file.
 /// Returns the path to the rendered file.
+/// Convert paper size string (e.g. "10x15") to pixels at given DPI.
+fn paper_size_to_pixels(size: &str, dpi: u32) -> (u32, u32) {
+    let parts: Vec<&str> = size.split('x').collect();
+    if parts.len() == 2 {
+        let w_cm: f32 = parts[0].parse().unwrap_or(10.0);
+        let h_cm: f32 = parts[1].parse().unwrap_or(15.0);
+        let w = (w_cm / 2.54 * dpi as f32) as u32;
+        let h = (h_cm / 2.54 * dpi as f32) as u32;
+        return (w.max(1), h.max(1));
+    }
+    (1181, 1772) // default ~10x15 @ 300dpi
+}
+
+/// Apply rotation, zoom-crop, grayscale and text to an image and save to temp file.
+/// Returns the path to the rendered file.
+///
+/// Optimised pipeline: crop → resize to print resolution → grayscale/text → save.
+/// All heavy operations (grayscale, rgba conversion, jpeg encode) happen on the
+/// small output image instead of the full-resolution source.
 pub fn render_edited_photo(
     src_path: &Path,
     edit: &PhotoEdit,
@@ -1611,7 +1751,7 @@ pub fn render_edited_photo(
 ) -> Result<PathBuf, String> {
     let mut img = image::open(src_path).map_err(|e| e.to_string())?;
 
-    // Apply rotation
+    // 1. Rotate
     img = match edit.rotation {
         90 => img.rotate90(),
         180 => img.rotate180(),
@@ -1619,12 +1759,10 @@ pub fn render_edited_photo(
         _ => img,
     };
 
-    // Apply grayscale
-    if edit.grayscale {
-        img = img.grayscale();
-    }
+    // 2. Target output size at 300 DPI (standard photo print)
+    let (target_w, target_h) = paper_size_to_pixels(paper_size, 300);
 
-    // Calculate crop in pixel coords (after rotation)
+    // 3. Calculate crop rectangle on the (possibly rotated) source
     let (img_w, img_h) = (img.width() as f32, img.height() as f32);
     let frame_aspect = paper_size_aspect(paper_size);
     let eff_aspect = img_w / img_h.max(1.0);
@@ -1645,22 +1783,34 @@ pub fn render_edited_photo(
     cx = cx.max(0.0).min(img_w - crop_w);
     cy = cy.max(0.0).min(img_h - crop_h);
 
+    // 4. Crop (still at source resolution, but only the region we need)
     let cropped = img.crop_imm(cx as u32, cy as u32, crop_w as u32, crop_h as u32);
 
-    // Convert to RGBA for text drawing
-    let mut final_img = cropped.to_rgba8();
+    // 5. Resize crop to the exact print resolution — all further work is on a small image
+    use image::imageops::FilterType;
+    let small = cropped.resize(target_w, target_h, FilterType::Triangle);
 
-    // Draw text overlay if present
+    // 6. Grayscale (now cheap because image is small)
+    let small = if edit.grayscale {
+        small.grayscale()
+    } else {
+        small
+    };
+
+    // 7. Convert to RGBA for text drawing
+    let mut rgba = small.to_rgba8();
+
+    // 8. Draw text overlay if present
     if !edit.text_overlay.is_empty() {
         if let Ok(font_data) = std::fs::read("/usr/share/fonts/TTF/DejaVuSans.ttf") {
             if let Ok(font) = ab_glyph::FontArc::try_from_vec(font_data) {
                 let scale = ab_glyph::PxScale::from(edit.text_size as f32);
                 let (tw, th) = imageproc::drawing::text_size(scale, &font, &edit.text_overlay);
-                let x = ((final_img.width().saturating_sub(tw)) as f32 * edit.text_x) as i32;
-                let y = ((final_img.height().saturating_sub(th)) as f32 * edit.text_y) as i32;
+                let x = ((rgba.width().saturating_sub(tw)) as f32 * edit.text_x) as i32;
+                let y = ((rgba.height().saturating_sub(th)) as f32 * edit.text_y) as i32;
                 let white = image::Rgba([255u8, 255u8, 255u8, 255u8]);
                 imageproc::drawing::draw_text_mut(
-                    &mut final_img,
+                    &mut rgba,
                     white,
                     x,
                     y,
@@ -1672,10 +1822,10 @@ pub fn render_edited_photo(
         }
     }
 
-    // JPEG does not support RGBA8 — convert back to RGB8 before saving
-    let rgb_img = image::DynamicImage::ImageRgba8(final_img).to_rgb8();
+    // 9. RGBA → RGB for JPEG
+    let rgb = image::DynamicImage::ImageRgba8(rgba).to_rgb8();
 
-    // Save to temp
+    // 10. Save with a fast JPEG quality (85 is a good balance of speed/size/quality)
     let file_name = format!(
         "edit_{}_{}.jpg",
         std::time::SystemTime::now()
@@ -1685,7 +1835,19 @@ pub fn render_edited_photo(
         fastrand::u32(..)
     );
     let out_path = temp_dir.join(&file_name);
-    rgb_img.save(&out_path).map_err(|e| e.to_string())?;
+
+    let file =
+        std::fs::File::create(&out_path).map_err(|e| format!("Kunde inte skapa fil: {}", e))?;
+    let mut writer = std::io::BufWriter::new(file);
+    let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut writer, 85);
+    encoder
+        .encode(
+            &rgb,
+            rgb.width(),
+            rgb.height(),
+            image::ExtendedColorType::Rgb8,
+        )
+        .map_err(|e| e.to_string())?;
 
     Ok(out_path)
 }
@@ -1699,6 +1861,56 @@ fn load_texture(ctx: &Context, path: &Path) -> Option<TextureHandle> {
         path.to_string_lossy(),
         egui::ColorImage::from_rgba_unmultiplied([size as usize, size as usize], &rgba.into_raw()),
         egui::TextureOptions::default(),
+    ))
+}
+
+fn load_full_res_texture(ctx: &Context, path: &Path) -> Option<TextureHandle> {
+    let image = image::open(path).ok()?;
+    // Cap at 1920px on the longest side to keep GPU memory reasonable
+    let max_dim = 1920;
+    let (w, h) = (image.width(), image.height());
+    let image = if w.max(h) > max_dim {
+        let factor = max_dim as f32 / w.max(h) as f32;
+        image.resize(
+            (w as f32 * factor) as u32,
+            (h as f32 * factor) as u32,
+            image::imageops::FilterType::Triangle,
+        )
+    } else {
+        image
+    };
+    let rgba = image.to_rgba8();
+    Some(ctx.load_texture(
+        path.to_string_lossy(),
+        egui::ColorImage::from_rgba_unmultiplied(
+            [image.width() as usize, image.height() as usize],
+            &rgba.into_raw(),
+        ),
+        egui::TextureOptions::default(),
+    ))
+}
+
+/// Decode and resize an image for full-res preview, returning raw ColorImage data.
+/// This is meant to be called from a background thread — the UI thread creates the
+/// actual egui::TextureHandle from the returned ColorImage.
+fn load_full_res_color_image(path: &Path) -> Option<egui::ColorImage> {
+    let image = image::open(path).ok()?;
+    let max_dim = 1920;
+    let (w, h) = (image.width(), image.height());
+    let image = if w.max(h) > max_dim {
+        let factor = max_dim as f32 / w.max(h) as f32;
+        image.resize(
+            (w as f32 * factor) as u32,
+            (h as f32 * factor) as u32,
+            image::imageops::FilterType::Triangle,
+        )
+    } else {
+        image
+    };
+    let rgba = image.to_rgba8();
+    Some(egui::ColorImage::from_rgba_unmultiplied(
+        [image.width() as usize, image.height() as usize],
+        &rgba.into_raw(),
     ))
 }
 
