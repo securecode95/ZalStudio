@@ -246,6 +246,13 @@ pub struct ZalStudio {
     // Print history
     pub history_folders: Vec<std::path::PathBuf>,
 
+    // Color profile test image (projectbilder/liminal.png)
+    pub color_test_source: Option<egui::ColorImage>,
+    pub color_test_texture: Option<TextureHandle>,
+    pub color_preview_dirty: bool,
+    pub color_preview_last_update: Instant,
+    pub color_preview_printer: String,
+
     // Settings / admin
     pub settings_pin_input: String,
     pub settings_auth_failed: bool,
@@ -261,6 +268,7 @@ pub enum SettingsTab {
     Prices,
     General,
     Dispatcher,
+    Color,
 }
 
 impl ZalStudio {
@@ -337,7 +345,7 @@ impl ZalStudio {
             .map(|name| Printer::new(name))
             .collect();
 
-        Self {
+        let mut app = Self {
             screen: AppScreen::ProductSelect,
             lang,
             photos,
@@ -364,6 +372,11 @@ impl ZalStudio {
             thank_you_timer: 5.0,
             history_folders: Vec::new(),
             history_job_map: std::collections::HashMap::new(),
+            color_test_source: None,
+            color_test_texture: None,
+            color_preview_dirty: false,
+            color_preview_last_update: Instant::now(),
+            color_preview_printer: String::new(),
             config,
             import_status: String::new(),
             server_url,
@@ -420,7 +433,25 @@ impl ZalStudio {
             settings_price_edit: HashMap::new(),
             settings_product_active: HashMap::new(),
             settings_save_confirm: 0.0,
+        };
+
+        // Load color test image (liminal.png) for live color preview
+        let test_path = PathBuf::from("projectbilder/liminal.png");
+        if let Ok(img) = image::open(&test_path) {
+            let rgba = img.to_rgba8();
+            let size = [rgba.width() as usize, rgba.height() as usize];
+            let pixels = rgba.into_raw();
+            let color_image = egui::ColorImage::from_rgba_unmultiplied(size, &pixels);
+            let tex = cc.egui_ctx.load_texture(
+                "color_test_source",
+                color_image.clone(),
+                egui::TextureOptions::default(),
+            );
+            app.color_test_source = Some(color_image);
+            app.color_test_texture = Some(tex);
         }
+
+        app
     }
 
     // ========================================================================
@@ -685,49 +716,9 @@ impl ZalStudio {
 
     /// Render the current edit and save it back over the original photo file,
     /// then refresh the gallery entry so the updated image is shown.
-    pub fn save_current_edit(&mut self) -> Result<(), String> {
-        let photo = self
-            .photos
-            .get(self.selected_photo)
-            .ok_or("Ingen bild vald")?;
-        let src_path = photo.path.clone();
-        let paper_size = self.selected_product_size.clone();
-
-        // Ensure photo directory exists
-        let _ = std::fs::create_dir_all(&self.config.photo_directory);
-
-        // Render edited image
-        let out_path = render_edited_photo(
-            &src_path,
-            &self.current_edit,
-            &paper_size,
-            &self.config.photo_directory,
-        )?;
-
-        // Atomically replace original file
-        let tmp_path = src_path.with_extension("tmp");
-        std::fs::copy(&out_path, &tmp_path)
-            .map_err(|e| format!("Kunde inte kopiera redigerad bild: {}", e))?;
-        std::fs::rename(&tmp_path, &src_path).map_err(|e| format!("Kunde inte spara: {}", e))?;
-        let _ = std::fs::remove_file(&out_path);
-
-        // Reload dimensions from the saved file
-        if let Ok(img) = image::open(&src_path) {
-            if let Some(p) = self.photos.get_mut(self.selected_photo) {
-                p.dimensions = Some((img.width(), img.height()));
-            }
-        }
-
-        // Remove old texture from cache so it reloads
-        let key = src_path.to_string_lossy().to_string();
-        self.textures.remove(&key);
-
-        // Reset edit state
-        self.current_edit = PhotoEdit::default();
-
-        self.show_toast("Bilden sparad".to_string());
-        self.screen = AppScreen::Gallery;
-        Ok(())
+    /// Start async save in background thread. UI polls save_rx in update().
+    pub fn save_current_edit(&mut self) {
+        self.start_save_edit_thread();
     }
 
     /// Spawn a background thread to render and save the edited image.
@@ -750,13 +741,10 @@ impl ZalStudio {
 
         std::thread::spawn(move || {
             let result = (|| -> Result<(), String> {
-                let out_path = render_edited_photo(&photo.path, &edit, &paper_size, &photo_dir)?;
                 let tmp_path = photo.path.with_extension("tmp");
-                std::fs::copy(&out_path, &tmp_path)
-                    .map_err(|e| format!("Kunde inte kopiera redigerad bild: {}", e))?;
+                render_edited_photo(&photo.path, &edit, &paper_size, &tmp_path)?;
                 std::fs::rename(&tmp_path, &photo.path)
                     .map_err(|e| format!("Kunde inte spara: {}", e))?;
-                let _ = std::fs::remove_file(&out_path);
                 Ok(())
             })();
             let _ = tx.send(result);
@@ -885,21 +873,26 @@ impl ZalStudio {
                 }
             };
 
-            // Render edited version (crop, rotate, B&W) to a temp file
-            // Always print original (edits are saved destructively to the source file)
-            let edit_path = match render_edited_photo(
+            // Render to a temp file for printing
+            let file_name = format!(
+                "print_{}_{}.jpg",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis(),
+                fastrand::u32(..)
+            );
+            let edit_path = self.config.temp_directory.join(&file_name);
+            if let Err(e) = render_edited_photo(
                 &photo.path,
                 &PhotoEdit::default(),
                 &item.paper_size,
-                &self.config.temp_directory,
+                &edit_path,
             ) {
-                Ok(path) => path,
-                Err(e) => {
-                    eprintln!("[PRINT] Failed to render edited photo: {}", e);
-                    failed += 1;
-                    continue;
-                }
-            };
+                eprintln!("[PRINT] Failed to render edited photo: {}", e);
+                failed += 1;
+                continue;
+            }
 
             // Save to print history before dispatching
             let hist_result = crate::print_history::save_print(
@@ -914,11 +907,14 @@ impl ZalStudio {
             );
             let hist_folder = hist_result.ok();
 
+            let cups_media = self.config.media_for_size(&item.paper_size)
+                .unwrap_or(&item.paper_size);
+            let printer_opts = self.config.options_for_printer(printer_name).clone();
             let job_id = printer.queue_job(
                 &edit_path,
-                &item.paper_size,
+                cups_media,
                 item.copies,
-                self.config.fit_to_page,
+                printer_opts,
             );
 
             if let Some(folder) = hist_folder {
@@ -1020,11 +1016,14 @@ impl ZalStudio {
             None => return Err(format!("Skrivaren '{}' hittades inte", printer_name)),
         };
 
+        let cups_media = self.config.media_for_size(&record.paper_size)
+            .unwrap_or(&record.paper_size);
+        let printer_opts = self.config.options_for_printer(printer_name).clone();
         let _job_id = printer.queue_job(
             &photo_path,
-            &record.paper_size,
+            cups_media,
             record.copies,
-            self.config.fit_to_page,
+            printer_opts,
         );
         Ok(())
     }
@@ -1422,6 +1421,118 @@ impl ZalStudio {
 }
 
 // ============================================================================
+// Color adjustment helpers for live preview
+// ============================================================================
+fn parse_gutenprint_value(val: &str) -> f32 {
+    match val {
+        "None" => 1.0,
+        "Custom.REAL" => 1.0,
+        _ => val.parse::<f32>().unwrap_or(1000.0) / 1000.0,
+    }
+}
+
+fn parse_balance(val: &str) -> f32 {
+    match val {
+        "None" => 0.0,
+        "Custom.REAL" => 0.0,
+        _ => (val.parse::<f32>().unwrap_or(1000.0) - 1000.0) / 1000.0 * 0.25,
+    }
+}
+
+/// Approximate Gutenprint's default color conversion for CP-9550DW-S.
+/// Dye-sub printers produce warmer (yellower) output than sRGB due to
+/// their RGB→CMY transform and lower effective gamma.
+fn apply_printer_baseline(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
+    // 1. sRGB gamma → linear
+    let to_lin = |v: f32| v.powf(2.2);
+    let r_lin = to_lin(r);
+    let g_lin = to_lin(g);
+    let b_lin = to_lin(b);
+
+    // 2. Approximate dye-sub RGB→CMY→RGB matrix (warmer, yellower)
+    //    This mimics Gutenprint's internal LUT for this printer family.
+    let r_out = 1.02 * r_lin + 0.02 * g_lin - 0.01 * b_lin;
+    let g_out = 0.01 * r_lin + 0.98 * g_lin + 0.03 * b_lin;
+    let b_out = -0.02 * r_lin + 0.06 * g_lin + 0.94 * b_lin;
+
+    // 3. Printer gamma (~1.7 for dye-sub) → display space
+    let from_printer = |v: f32| v.powf(1.0 / 1.7);
+
+    (
+        from_printer(r_out).clamp(0.0, 1.0),
+        from_printer(g_out).clamp(0.0, 1.0),
+        from_printer(b_out).clamp(0.0, 1.0),
+    )
+}
+
+pub fn apply_color_adjustments(
+    source: &egui::ColorImage,
+    opts: &crate::config::PrinterOptions,
+) -> egui::ColorImage {
+    let mut result = source.clone();
+    let pixels = result.pixels.as_mut_slice();
+
+    let brightness = parse_gutenprint_value(&opts.brightness);
+    let contrast = parse_gutenprint_value(&opts.contrast);
+    let saturation = parse_gutenprint_value(&opts.saturation);
+    let gamma = parse_gutenprint_value(&opts.gamma);
+    let cyan_g = parse_gutenprint_value(&opts.cyan_gamma);
+    let magenta_g = parse_gutenprint_value(&opts.magenta_gamma);
+    let yellow_g = parse_gutenprint_value(&opts.yellow_gamma);
+    let cyan_b = parse_balance(&opts.cyan_balance);
+    let magenta_b = parse_balance(&opts.magenta_balance);
+    let yellow_b = parse_balance(&opts.yellow_balance);
+
+    // ColorCorrection bonuses
+    let (brightness_bonus, contrast_bonus, sat_bonus) = match opts.color_correction.as_str() {
+        "Accurate" => (0.0, 0.0, 0.0),
+        "Bright" => (0.08, 0.0, 0.12),
+        "None" => (0.0, 0.15, 0.0),
+        _ => (0.0, 0.0, 0.0),
+    };
+    let eff_brightness = brightness + brightness_bonus;
+    let eff_contrast = contrast + contrast_bonus;
+    let eff_saturation = saturation + sat_bonus;
+
+    for p in pixels.iter_mut() {
+        let r = p.r() as f32 / 255.0;
+        let g = p.g() as f32 / 255.0;
+        let b = p.b() as f32 / 255.0;
+
+        // ── Printer baseline (Gutenprint default for CP-9550DW-S) ──
+        let (r, g, b) = apply_printer_baseline(r, g, b);
+
+        // ── User-adjustable per-channel gamma ──
+        let r = r.powf(1.0 / (cyan_g * gamma).max(0.1)) + cyan_b;
+        let g = g.powf(1.0 / (magenta_g * gamma).max(0.1)) + magenta_b;
+        let b = b.powf(1.0 / (yellow_g * gamma).max(0.1)) + yellow_b;
+
+        // ── Saturation ──
+        let gray = (r + g + b) / 3.0;
+        let r = gray + (r - gray) * eff_saturation;
+        let g = gray + (g - gray) * eff_saturation;
+        let b = gray + (b - gray) * eff_saturation;
+
+        // ── Contrast ──
+        let r = (r - 0.5) * eff_contrast + 0.5;
+        let g = (g - 0.5) * eff_contrast + 0.5;
+        let b = (b - 0.5) * eff_contrast + 0.5;
+
+        // ── Brightness ──
+        let r = r * eff_brightness;
+        let g = g * eff_brightness;
+        let b = b * eff_brightness;
+
+        let r = (r * 255.0).clamp(0.0, 255.0) as u8;
+        let g = (g * 255.0).clamp(0.0, 255.0) as u8;
+        let b = (b * 255.0).clamp(0.0, 255.0) as u8;
+        *p = egui::Color32::from_rgb(r, g, b);
+    }
+
+    result
+}
+
+// ============================================================================
 // eframe App trait
 // ============================================================================
 impl eframe::App for ZalStudio {
@@ -1431,6 +1542,24 @@ impl eframe::App for ZalStudio {
             *t -= ctx.input(|i| i.unstable_dt);
             if *t <= 0.0 {
                 self.toast = None;
+            }
+        }
+
+        // Live color preview throttle (re-render every 150ms when dirty)
+        if self.color_preview_dirty
+            && self.color_preview_last_update.elapsed().as_millis() > 150
+        {
+            self.color_preview_dirty = false;
+            self.color_preview_last_update = Instant::now();
+            if let Some(ref source) = self.color_test_source {
+                let opts = self.config.options_for_printer(&self.color_preview_printer).clone();
+                let adjusted = apply_color_adjustments(source, &opts);
+                let tex = ctx.load_texture(
+                    "color_preview",
+                    adjusted,
+                    egui::TextureOptions::default(),
+                );
+                self.color_test_texture = Some(tex);
             }
         }
 
@@ -1747,11 +1876,11 @@ pub fn render_edited_photo(
     src_path: &Path,
     edit: &PhotoEdit,
     paper_size: &str,
-    temp_dir: &Path,
-) -> Result<PathBuf, String> {
+    out_path: &Path,
+) -> Result<(), String> {
     let mut img = image::open(src_path).map_err(|e| e.to_string())?;
 
-    // 1. Rotate
+    // 1. Rotate (only if needed)
     img = match edit.rotation {
         90 => img.rotate90(),
         180 => img.rotate180(),
@@ -1759,10 +1888,7 @@ pub fn render_edited_photo(
         _ => img,
     };
 
-    // 2. Target output size at 300 DPI (standard photo print)
-    let (target_w, target_h) = paper_size_to_pixels(paper_size, 300);
-
-    // 3. Calculate crop rectangle on the (possibly rotated) source
+    // 2. Calculate crop rectangle
     let (img_w, img_h) = (img.width() as f32, img.height() as f32);
     let frame_aspect = paper_size_aspect(paper_size);
     let eff_aspect = img_w / img_h.max(1.0);
@@ -1783,25 +1909,29 @@ pub fn render_edited_photo(
     cx = cx.max(0.0).min(img_w - crop_w);
     cy = cy.max(0.0).min(img_h - crop_h);
 
-    // 4. Crop (still at source resolution, but only the region we need)
-    let cropped = img.crop_imm(cx as u32, cy as u32, crop_w as u32, crop_h as u32);
+    // 3. Crop
+    let mut cropped = img.crop_imm(cx as u32, cy as u32, crop_w as u32, crop_h as u32);
 
-    // 5. Resize crop to the exact print resolution — all further work is on a small image
-    use image::imageops::FilterType;
-    let small = cropped.resize(target_w, target_h, FilterType::Triangle);
+    // 4. Grayscale (if needed)
+    if edit.grayscale {
+        cropped = cropped.grayscale();
+    }
 
-    // 6. Grayscale (now cheap because image is small)
-    let small = if edit.grayscale {
-        small.grayscale()
+    // 5. Save path — write directly to final location (caller handles atomic rename)
+    let file = std::fs::File::create(out_path)
+        .map_err(|e| format!("Kunde inte skapa fil: {}", e))?;
+    let mut writer = std::io::BufWriter::new(file);
+
+    // Fast path: no text → save directly as RGB8 JPEG, skip RGBA conversion entirely
+    if edit.text_overlay.is_empty() {
+        let rgb = cropped.to_rgb8();
+        let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut writer, 90);
+        encoder
+            .encode(&rgb, rgb.width(), rgb.height(), image::ExtendedColorType::Rgb8)
+            .map_err(|e| e.to_string())?;
     } else {
-        small
-    };
-
-    // 7. Convert to RGBA for text drawing
-    let mut rgba = small.to_rgba8();
-
-    // 8. Draw text overlay if present
-    if !edit.text_overlay.is_empty() {
+        // Slow path: text overlay requires RGBA
+        let mut rgba = cropped.to_rgba8();
         if let Ok(font_data) = std::fs::read("/usr/share/fonts/TTF/DejaVuSans.ttf") {
             if let Ok(font) = ab_glyph::FontArc::try_from_vec(font_data) {
                 let scale = ab_glyph::PxScale::from(edit.text_size as f32);
@@ -1810,46 +1940,18 @@ pub fn render_edited_photo(
                 let y = ((rgba.height().saturating_sub(th)) as f32 * edit.text_y) as i32;
                 let white = image::Rgba([255u8, 255u8, 255u8, 255u8]);
                 imageproc::drawing::draw_text_mut(
-                    &mut rgba,
-                    white,
-                    x,
-                    y,
-                    scale,
-                    &font,
-                    &edit.text_overlay,
+                    &mut rgba, white, x, y, scale, &font, &edit.text_overlay,
                 );
             }
         }
+        let rgb = image::DynamicImage::ImageRgba8(rgba).to_rgb8();
+        let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut writer, 90);
+        encoder
+            .encode(&rgb, rgb.width(), rgb.height(), image::ExtendedColorType::Rgb8)
+            .map_err(|e| e.to_string())?;
     }
 
-    // 9. RGBA → RGB for JPEG
-    let rgb = image::DynamicImage::ImageRgba8(rgba).to_rgb8();
-
-    // 10. Save with a fast JPEG quality (85 is a good balance of speed/size/quality)
-    let file_name = format!(
-        "edit_{}_{}.jpg",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis(),
-        fastrand::u32(..)
-    );
-    let out_path = temp_dir.join(&file_name);
-
-    let file =
-        std::fs::File::create(&out_path).map_err(|e| format!("Kunde inte skapa fil: {}", e))?;
-    let mut writer = std::io::BufWriter::new(file);
-    let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut writer, 85);
-    encoder
-        .encode(
-            &rgb,
-            rgb.width(),
-            rgb.height(),
-            image::ExtendedColorType::Rgb8,
-        )
-        .map_err(|e| e.to_string())?;
-
-    Ok(out_path)
+    Ok(())
 }
 
 fn load_texture(ctx: &Context, path: &Path) -> Option<TextureHandle> {

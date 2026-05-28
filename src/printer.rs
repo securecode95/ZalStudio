@@ -3,6 +3,8 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
+use crate::config::PrinterOptions;
+
 #[derive(Debug, Clone)]
 pub struct PrintJob {
     pub id: usize,
@@ -45,7 +47,7 @@ impl Printer {
         photo_path: &Path,
         media_size: &str,
         copies: u32,
-        fit_to_page: bool,
+        options: PrinterOptions,
     ) -> usize {
         let mut counter = self.counter.lock().unwrap();
         *counter += 1;
@@ -80,7 +82,7 @@ impl Printer {
                 &job.photo_path,
                 &job.media_size,
                 job.copies,
-                fit_to_page,
+                &options,
             );
 
             {
@@ -113,18 +115,27 @@ impl Printer {
         image_path: &str,
         media_size: &str,
         copies: u32,
-        fit_to_page: bool,
+        opts: &PrinterOptions,
     ) -> Result<(), String> {
         let mut cmd = Command::new("lp");
-        cmd.arg("-d")
-            .arg(printer_name)
-            .arg("-o")
-            .arg(format!("media={}", media_size))
-            .arg("-n")
-            .arg(copies.to_string());
-        if fit_to_page {
-            cmd.arg("-o").arg("fit-to-page");
-        }
+        cmd.arg("-d").arg(printer_name)
+            .arg("-o").arg(format!("media={}", media_size))
+            .arg("-o").arg("StpColorPrecision=Best")
+            .arg("-o").arg("StpPrintSpeed=SuperFine")
+            .arg("-o").arg("StpImageType=Photo")
+            .arg("-o").arg("ColorModel=RGB")
+            .arg("-o").arg(format!("StpColorCorrection={}", opts.color_correction))
+            .arg("-o").arg(format!("StpBrightness={}", opts.brightness))
+            .arg("-o").arg(format!("StpContrast={}", opts.contrast))
+            .arg("-o").arg(format!("StpSaturation={}", opts.saturation))
+            .arg("-o").arg(format!("StpGamma={}", opts.gamma))
+            .arg("-o").arg(format!("StpCyanGamma={}", opts.cyan_gamma))
+            .arg("-o").arg(format!("StpMagentaGamma={}", opts.magenta_gamma))
+            .arg("-o").arg(format!("StpYellowGamma={}", opts.yellow_gamma))
+            .arg("-o").arg(format!("StpCyanBalance={}", opts.cyan_balance))
+            .arg("-o").arg(format!("StpMagentaBalance={}", opts.magenta_balance))
+            .arg("-o").arg(format!("StpYellowBalance={}", opts.yellow_balance))
+            .arg("-n").arg(copies.to_string());
         cmd.arg(image_path);
 
         let output = cmd

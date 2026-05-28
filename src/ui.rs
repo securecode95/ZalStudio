@@ -1175,12 +1175,12 @@ fn draw_preview(ctx: &egui::Context, app: &mut ZalStudio) {
 
             if let Some((tex_id, tex_size)) = tex_info {
                 let available = ui.available_size();
-                let bottom_h = 90.0 * s;
+                let bottom_h = 72.0 * s;
                 let main_h = available.y - bottom_h;
-                let left_w = 140.0 * s;
-                let right_w = 220.0 * s;
-                let gap = 16.0 * s;
-                let img_max_w = available.x - left_w - right_w - gap * 2.0;
+                let left_w = (110.0 * s).min(available.x * 0.14);
+                let right_w = (170.0 * s).min(available.x * 0.20);
+                let gap = 10.0 * s;
+                let img_max_w = (available.x - left_w - right_w - gap * 2.0).max(100.0);
                 let img_max_h = main_h;
 
                 // ── Main area: Left | Center (image) | Right ──────────────
@@ -1201,13 +1201,13 @@ fn draw_preview(ctx: &egui::Context, app: &mut ZalStudio) {
                                 // Zoom out
                                 let zoom_out = egui::Button::new(
                                     egui::RichText::new("−")
-                                        .size(22.0 * s)
+                                        .size(20.0 * s)
                                         .strong()
                                         .color(Color32::WHITE),
                                 )
                                 .fill(Color32::from_rgb(50, 60, 80))
-                                .rounding(Rounding::same(8.0 * s))
-                                .min_size(Vec2::new(72.0 * s, 56.0 * s));
+                                .rounding(Rounding::same(6.0 * s))
+                                .min_size(Vec2::new(56.0 * s, 44.0 * s));
                                 if ui.add(zoom_out).clicked()
                                     && !saving
                                     && app.current_edit.zoom > 1.0
@@ -1224,13 +1224,13 @@ fn draw_preview(ctx: &egui::Context, app: &mut ZalStudio) {
                                 // Zoom in
                                 let zoom_in = egui::Button::new(
                                     egui::RichText::new("+")
-                                        .size(22.0 * s)
+                                        .size(20.0 * s)
                                         .strong()
                                         .color(Color32::WHITE),
                                 )
                                 .fill(Color32::from_rgb(50, 60, 80))
-                                .rounding(Rounding::same(8.0 * s))
-                                .min_size(Vec2::new(72.0 * s, 56.0 * s));
+                                .rounding(Rounding::same(6.0 * s))
+                                .min_size(Vec2::new(56.0 * s, 44.0 * s));
                                 if ui.add(zoom_in).clicked()
                                     && !saving
                                     && app.current_edit.zoom < 5.0
@@ -1243,12 +1243,12 @@ fn draw_preview(ctx: &egui::Context, app: &mut ZalStudio) {
                                 // Rotate left
                                 let rot_left = egui::Button::new(
                                     egui::RichText::new("↺")
-                                        .size(24.0 * s)
+                                        .size(20.0 * s)
                                         .color(Color32::WHITE),
                                 )
                                 .fill(Color32::from_rgb(50, 60, 80))
-                                .rounding(Rounding::same(8.0 * s))
-                                .min_size(Vec2::new(72.0 * s, 56.0 * s));
+                                .rounding(Rounding::same(6.0 * s))
+                                .min_size(Vec2::new(56.0 * s, 44.0 * s));
                                 if ui.add(rot_left).clicked() && !saving {
                                     app.current_edit.rotation =
                                         (app.current_edit.rotation + 270) % 360;
@@ -1259,12 +1259,12 @@ fn draw_preview(ctx: &egui::Context, app: &mut ZalStudio) {
                                 // Rotate right
                                 let rot_right = egui::Button::new(
                                     egui::RichText::new("↻")
-                                        .size(24.0 * s)
+                                        .size(20.0 * s)
                                         .color(Color32::WHITE),
                                 )
                                 .fill(Color32::from_rgb(50, 60, 80))
-                                .rounding(Rounding::same(8.0 * s))
-                                .min_size(Vec2::new(72.0 * s, 56.0 * s));
+                                .rounding(Rounding::same(6.0 * s))
+                                .min_size(Vec2::new(56.0 * s, 44.0 * s));
                                 if ui.add(rot_right).clicked() && !saving {
                                     app.current_edit.rotation =
                                         (app.current_edit.rotation + 90) % 360;
@@ -1280,7 +1280,7 @@ fn draw_preview(ctx: &egui::Context, app: &mut ZalStudio) {
                                 };
                                 let bw_btn = egui::Button::new(
                                     egui::RichText::new(bw_text)
-                                        .size(13.0 * s)
+                                        .size(12.0 * s)
                                         .color(Color32::WHITE),
                                 )
                                 .fill(if app.current_edit.grayscale {
@@ -1288,8 +1288,8 @@ fn draw_preview(ctx: &egui::Context, app: &mut ZalStudio) {
                                 } else {
                                     Color32::from_rgb(50, 60, 80)
                                 })
-                                .rounding(Rounding::same(8.0 * s))
-                                .min_size(Vec2::new(100.0 * s, 56.0 * s));
+                                .rounding(Rounding::same(6.0 * s))
+                                .min_size(Vec2::new(80.0 * s, 44.0 * s));
                                 if ui.add(bw_btn).clicked() && !saving {
                                     app.current_edit.grayscale = !app.current_edit.grayscale;
                                 }
@@ -1404,7 +1404,7 @@ fn draw_preview(ctx: &egui::Context, app: &mut ZalStudio) {
                                     egui::TextEdit::singleline(&mut app.current_edit.text_overlay)
                                         .font(egui::TextStyle::Body)
                                         .hint_text("Skriv text...")
-                                        .desired_width(180.0 * s);
+                                        .desired_width(140.0 * s);
                                 ui.add(text_edit);
 
                                 ui.add_space(12.0 * s);
@@ -1412,15 +1412,15 @@ fn draw_preview(ctx: &egui::Context, app: &mut ZalStudio) {
                                 // Arrow pad in cross layout
                                 ui.vertical(|ui| {
                                     ui.horizontal(|ui| {
-                                        ui.add_space(60.0 * s);
+                                        ui.add_space(44.0 * s);
                                         let up_btn = egui::Button::new(
                                             egui::RichText::new("▲")
-                                                .size(18.0 * s)
+                                                .size(16.0 * s)
                                                 .color(Color32::WHITE),
                                         )
                                         .fill(Color32::from_rgb(50, 60, 80))
                                         .rounding(Rounding::same(6.0 * s))
-                                        .min_size(Vec2::new(56.0 * s, 48.0 * s));
+                                        .min_size(Vec2::new(44.0 * s, 40.0 * s));
                                         if ui.add(up_btn).clicked() && !saving {
                                             app.current_edit.text_y =
                                                 (app.current_edit.text_y - 0.05).max(0.05);
@@ -1429,12 +1429,12 @@ fn draw_preview(ctx: &egui::Context, app: &mut ZalStudio) {
                                     ui.horizontal(|ui| {
                                         let left_btn = egui::Button::new(
                                             egui::RichText::new("◀")
-                                                .size(18.0 * s)
+                                                .size(16.0 * s)
                                                 .color(Color32::WHITE),
                                         )
                                         .fill(Color32::from_rgb(50, 60, 80))
                                         .rounding(Rounding::same(6.0 * s))
-                                        .min_size(Vec2::new(56.0 * s, 48.0 * s));
+                                        .min_size(Vec2::new(44.0 * s, 40.0 * s));
                                         if ui.add(left_btn).clicked() && !saving {
                                             app.current_edit.text_x =
                                                 (app.current_edit.text_x - 0.05).max(0.05);
@@ -1442,12 +1442,12 @@ fn draw_preview(ctx: &egui::Context, app: &mut ZalStudio) {
                                         ui.add_space(4.0 * s);
                                         let down_btn = egui::Button::new(
                                             egui::RichText::new("▼")
-                                                .size(18.0 * s)
+                                                .size(16.0 * s)
                                                 .color(Color32::WHITE),
                                         )
                                         .fill(Color32::from_rgb(50, 60, 80))
                                         .rounding(Rounding::same(6.0 * s))
-                                        .min_size(Vec2::new(56.0 * s, 48.0 * s));
+                                        .min_size(Vec2::new(44.0 * s, 40.0 * s));
                                         if ui.add(down_btn).clicked() && !saving {
                                             app.current_edit.text_y =
                                                 (app.current_edit.text_y + 0.05).min(0.95);
@@ -1455,12 +1455,12 @@ fn draw_preview(ctx: &egui::Context, app: &mut ZalStudio) {
                                         ui.add_space(4.0 * s);
                                         let right_btn = egui::Button::new(
                                             egui::RichText::new("▶")
-                                                .size(18.0 * s)
+                                                .size(16.0 * s)
                                                 .color(Color32::WHITE),
                                         )
                                         .fill(Color32::from_rgb(50, 60, 80))
                                         .rounding(Rounding::same(6.0 * s))
-                                        .min_size(Vec2::new(56.0 * s, 48.0 * s));
+                                        .min_size(Vec2::new(44.0 * s, 40.0 * s));
                                         if ui.add(right_btn).clicked() && !saving {
                                             app.current_edit.text_x =
                                                 (app.current_edit.text_x + 0.05).min(0.95);
@@ -1481,15 +1481,15 @@ fn draw_preview(ctx: &egui::Context, app: &mut ZalStudio) {
                                 );
                                 ui.add_space(4.0 * s);
                                 ui.horizontal(|ui| {
-                                    ui.add_space(20.0 * s);
+                                    ui.add_space(12.0 * s);
                                     let txt_minus = egui::Button::new(
                                         egui::RichText::new("−")
-                                            .size(16.0 * s)
+                                            .size(14.0 * s)
                                             .color(Color32::WHITE),
                                     )
                                     .fill(Color32::from_rgb(50, 60, 80))
                                     .rounding(Rounding::same(6.0 * s))
-                                    .min_size(Vec2::new(56.0 * s, 48.0 * s));
+                                    .min_size(Vec2::new(48.0 * s, 40.0 * s));
                                     if ui.add(txt_minus).clicked()
                                         && !saving
                                         && app.current_edit.text_size > 12
@@ -1524,7 +1524,7 @@ fn draw_preview(ctx: &egui::Context, app: &mut ZalStudio) {
 
                     // Left: paper size info
                     ui.vertical(|ui| {
-                        ui.set_min_size(Vec2::new(200.0 * s, btn_h));
+                        ui.set_min_size(Vec2::new(160.0 * s, btn_h));
                         ui.label(
                             egui::RichText::new(format!(
                                 "Format: {} · {}",
@@ -1558,13 +1558,13 @@ fn draw_preview(ctx: &egui::Context, app: &mut ZalStudio) {
                             });
                         } else {
                             let back_btn = egui::Button::new(
-                                egui::RichText::new("Tillbaka utan att spara")
+                                egui::RichText::new("Tillbaka")
                                     .size(13.0 * s)
                                     .color(text_mid),
                             )
                             .fill(Color32::from_rgb(30, 40, 60))
                             .rounding(Rounding::same(10.0 * s))
-                            .min_size(Vec2::new(180.0 * s, btn_h));
+                            .min_size(Vec2::new(120.0 * s, btn_h));
                             if ui.add(back_btn).clicked() {
                                 app.current_edit = crate::app::PhotoEdit::default();
                                 app.screen = AppScreen::Gallery;
@@ -1573,16 +1573,16 @@ fn draw_preview(ctx: &egui::Context, app: &mut ZalStudio) {
                             ui.add_space(12.0 * s);
 
                             let save_btn = egui::Button::new(
-                                egui::RichText::new("💾 Spara och gå tillbaka")
+                                egui::RichText::new("💾 Spara")
                                     .size(16.0 * s)
                                     .strong()
                                     .color(Color32::WHITE),
                             )
                             .fill(Color32::from_rgb(0, 229, 255))
                             .rounding(Rounding::same(12.0 * s))
-                            .min_size(Vec2::new(240.0 * s, btn_h));
+                            .min_size(Vec2::new(180.0 * s, btn_h));
                             if ui.add(save_btn).clicked() {
-                                app.start_save_edit_thread();
+                                app.save_current_edit();
                             }
                         }
                     });
@@ -3886,6 +3886,7 @@ fn draw_settings(ctx: &egui::Context, app: &mut ZalStudio) {
                     (crate::app::SettingsTab::Prices, "Priser"),
                     (crate::app::SettingsTab::General, "Allmänt"),
                     (crate::app::SettingsTab::Dispatcher, "Dispatcher"),
+                    (crate::app::SettingsTab::Color, "Färg"),
                 ];
                 for (tab, label) in tabs {
                     let active = app.settings_tab == tab;
@@ -4191,6 +4192,187 @@ fn draw_settings(ctx: &egui::Context, app: &mut ZalStudio) {
                                 });
                                 ui.add_space(8.0 * s);
                             }
+                        });
+                    }
+                }
+                crate::app::SettingsTab::Color => {
+                    ui.label(
+                        egui::RichText::new("Färgkalibrering – Live förhandsvisning")
+                            .size(18.0 * s)
+                            .strong()
+                            .color(text_dark),
+                    );
+                    ui.add_space(4.0 * s);
+                    ui.label(
+                        egui::RichText::new("Ändra värden och se direkt hur utskriften kommer se ut. Standard = None.")
+                            .size(12.0 * s)
+                            .color(text_mid),
+                    );
+                    ui.add_space(8.0 * s);
+
+                    let printers: Vec<String> = app.config.all_printers().iter().map(|&s| s.to_string()).collect();
+                    if printers.is_empty() {
+                        ui.label(egui::RichText::new("Inga skrivare konfigurerade.").size(14.0 * s).color(text_mid));
+                    } else {
+                        // Printer selector
+                        let mut selected = app.color_preview_printer.clone();
+                        if selected.is_empty() {
+                            selected = printers[0].clone();
+                            app.color_preview_printer = selected.clone();
+                        }
+                        egui::ComboBox::from_label("")
+                            .selected_text(egui::RichText::new(format!("🖨  {}", selected)).size(13.0 * s).color(text_dark))
+                            .show_ui(ui, |ui| {
+                                for p in &printers {
+                                    if ui.selectable_label(selected == *p, p).clicked() {
+                                        selected = p.clone();
+                                    }
+                                }
+                            });
+                        if selected != app.color_preview_printer {
+                            app.color_preview_printer = selected.clone();
+                            app.color_preview_dirty = true;
+                        }
+                        ui.add_space(8.0 * s);
+
+                        let preview_w = (ui.available_width() * 0.55).max(300.0 * s);
+                        let preview_h = (preview_w * 0.75).min(ui.available_height() - 60.0 * s);
+
+                        ui.horizontal(|ui| {
+                            // ── Left: live preview ──
+                            ui.vertical(|ui| {
+                                ui.set_width(preview_w);
+                                if let Some(ref tex) = app.color_test_texture {
+                                    let size = tex.size_vec2();
+                                    let aspect = size.x / size.y.max(1.0);
+                                    let h = preview_w / aspect;
+                                    let display_h = h.min(preview_h);
+                                    ui.image((tex.id(), egui::Vec2::new(preview_w, display_h)));
+                                } else {
+                                    ui.add_sized(
+                                        egui::Vec2::new(preview_w, preview_h),
+                                        egui::Spinner::new(),
+                                    );
+                                }
+                                ui.add_space(4.0 * s);
+                                ui.label(
+                                    egui::RichText::new("Testbild: projectbilder/liminal.png")
+                                        .size(10.0 * s)
+                                        .color(text_mid),
+                                );
+                            });
+
+                            ui.add_space(12.0 * s);
+
+                            // ── Right: controls ──
+                            ui.vertical(|ui| {
+                                let mut opts = app.config.options_for_printer(&selected).clone();
+                                let mut changed = false;
+
+                                let defaults = crate::config::PrinterOptions::default();
+
+                                let mut row = |ui: &mut egui::Ui, label: &str, val: &mut String, def: &str| -> bool {
+                                    let mut changed = false;
+                                    ui.horizontal(|ui| {
+                                        ui.set_width(ui.available_width());
+                                        ui.label(
+                                            egui::RichText::new(label).size(11.0 * s).color(text_mid),
+                                        );
+                                        // Show empty + hint when value equals default
+                                        let is_default = val == def;
+                                        let mut buf = if is_default { String::new() } else { val.clone() };
+                                        let resp = ui.add(
+                                            egui::TextEdit::singleline(&mut buf)
+                                                .desired_width(90.0 * s)
+                                                .hint_text(def)
+                                                .font(egui::TextStyle::Body),
+                                        );
+                                        if resp.changed() {
+                                            if buf.trim().is_empty() {
+                                                *val = def.to_string();
+                                            } else {
+                                                *val = buf;
+                                            }
+                                            changed = true;
+                                        }
+                                    });
+                                    ui.add_space(2.0 * s);
+                                    changed
+                                };
+
+                                changed |= row(ui, "ColorCorrection", &mut opts.color_correction, &defaults.color_correction);
+                                changed |= row(ui, "Brightness", &mut opts.brightness, &defaults.brightness);
+                                changed |= row(ui, "Contrast", &mut opts.contrast, &defaults.contrast);
+                                changed |= row(ui, "Saturation", &mut opts.saturation, &defaults.saturation);
+                                changed |= row(ui, "Gamma", &mut opts.gamma, &defaults.gamma);
+                                ui.add_space(4.0 * s);
+                                ui.label(
+                                    egui::RichText::new("Per-kanal justering (motverkar gulhet)")
+                                        .size(10.0 * s)
+                                        .color(Color32::from_rgb(100, 160, 220)),
+                                );
+                                changed |= row(ui, "Cyan Gamma", &mut opts.cyan_gamma, &defaults.cyan_gamma);
+                                changed |= row(ui, "Magenta Gamma", &mut opts.magenta_gamma, &defaults.magenta_gamma);
+                                changed |= row(ui, "Yellow Gamma", &mut opts.yellow_gamma, &defaults.yellow_gamma);
+                                changed |= row(ui, "Cyan Balance", &mut opts.cyan_balance, &defaults.cyan_balance);
+                                changed |= row(ui, "Magenta Balance", &mut opts.magenta_balance, &defaults.magenta_balance);
+                                changed |= row(ui, "Yellow Balance", &mut opts.yellow_balance, &defaults.yellow_balance);
+
+                                if changed {
+                                    app.config.printer_options.insert(selected.clone(), opts);
+                                    app.color_preview_dirty = true;
+                                }
+
+                                ui.add_space(8.0 * s);
+                                if ui
+                                    .add_sized(
+                                        Vec2::new(140.0 * s, 36.0 * s),
+                                        egui::Button::new(
+                                            egui::RichText::new("↺ Återställ default")
+                                                .size(11.0 * s)
+                                                .color(Color32::WHITE),
+                                        )
+                                        .fill(Color32::from_rgb(120, 120, 120))
+                                        .rounding(Rounding::same(6.0 * s)),
+                                    )
+                                    .clicked()
+                                {
+                                    let defaults = crate::config::PrinterOptions::default();
+                                    app.config.printer_options.insert(selected.clone(), defaults);
+                                    app.color_preview_dirty = true;
+                                }
+
+                                ui.add_space(8.0 * s);
+                                if ui
+                                    .add_sized(
+                                        Vec2::new(140.0 * s, 40.0 * s),
+                                        egui::Button::new(
+                                            egui::RichText::new("💾 Spara")
+                                                .size(13.0 * s)
+                                                .strong()
+                                                .color(Color32::WHITE),
+                                        )
+                                        .fill(Color32::from_rgb(0, 229, 255))
+                                        .rounding(Rounding::same(6.0 * s)),
+                                    )
+                                    .clicked()
+                                {
+                                    if let Err(e) = app.config.save() {
+                                        app.show_toast_long(format!("Kunde inte spara: {}", e));
+                                    } else {
+                                        app.settings_save_confirm = 3.0;
+                                        app.show_toast("Färgprofiler sparade".to_string());
+                                    }
+                                }
+                                if app.settings_save_confirm > 0.0 {
+                                    ui.add_space(4.0 * s);
+                                    ui.label(
+                                        egui::RichText::new("✓ Sparat!")
+                                            .size(12.0 * s)
+                                            .color(Color32::from_rgb(0, 255, 170)),
+                                    );
+                                }
+                            });
                         });
                     }
                 }

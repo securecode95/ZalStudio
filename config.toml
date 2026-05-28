@@ -5,7 +5,6 @@ paper_sizes = [
 ]
 default_paper_size = 0
 copies_default = 1
-fit_to_page = true
 usb_import_path = "/media"
 google_client_id = ""
 google_client_secret = ""
@@ -14,10 +13,40 @@ wifi_ssid = "ZalStudio"
 wifi_password = ""
 server_port = 8080
 
+[media_for_size]
+15x23 = "w432h648"
+10x15 = "w288h432"
+
 [printer_for_size]
 10x15 = "Printer1"
 15x23 = "Printer2"
 
+[printer_options.Printer1]
+color_correction = "Accurate"
+brightness = "None"
+contrast = "None"
+saturation = "None"
+gamma = "None"
+cyan_gamma = "None"
+magenta_gamma = "None"
+yellow_gamma = "None"
+cyan_balance = "None"
+magenta_balance = "None"
+yellow_balance = "None"
+
+[printer_options.Printer2]
+color_correction = "Accurate"
+brightness = "None"
+contrast = "None"
+saturation = "None"
+gamma = "None"
+cyan_gamma = "None"
+magenta_gamma = "None"
+yellow_gamma = "None"
+cyan_balance = "None"
+magenta_balance = "None"
+yellow_balance = "None"
+
 [price_per_format]
-15x23 = 12.0
+15x23 = 19.0
 10x15 = 8.0

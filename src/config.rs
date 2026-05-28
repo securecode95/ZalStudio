@@ -3,14 +3,50 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PrinterOptions {
+    pub color_correction: String,   // None, Accurate, Bright, Hue, Uncorrected, Raw, etc.
+    pub brightness: String,         // None, 1100, 1200, ... or Custom.REAL
+    pub contrast: String,           // None, 1100, 1200, ...
+    pub saturation: String,         // None, 1100, 1200, ...
+    pub gamma: String,              // None, 1100, 1200, ...
+    pub cyan_gamma: String,         // None, 1100, ...
+    pub magenta_gamma: String,      // None, 1100, ...
+    pub yellow_gamma: String,       // None, 1100, ...
+    pub cyan_balance: String,       // None, 1100, ...
+    pub magenta_balance: String,    // None, 1100, ...
+    pub yellow_balance: String,     // None, 1100, ...
+}
+
+impl Default for PrinterOptions {
+    fn default() -> Self {
+        Self {
+            color_correction: "Accurate".to_string(),
+            brightness: "None".to_string(),
+            contrast: "None".to_string(),
+            saturation: "None".to_string(),
+            gamma: "None".to_string(),
+            cyan_gamma: "None".to_string(),
+            magenta_gamma: "None".to_string(),
+            yellow_gamma: "None".to_string(),
+            cyan_balance: "None".to_string(),
+            magenta_balance: "None".to_string(),
+            yellow_balance: "None".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub photo_directory: PathBuf,
     pub paper_sizes: Vec<String>,
     pub default_paper_size: usize,
     pub copies_default: u32,
-    pub fit_to_page: bool,
+    /// Which CUPS media/PageSize to use for each paper size
+    pub media_for_size: HashMap<String, String>,
     /// Which CUPS printer to use for each paper size
     pub printer_for_size: HashMap<String, String>,
+    /// Per-printer color/quality options (key = CUPS printer name)
+    pub printer_options: HashMap<String, PrinterOptions>,
     /// Path to scan for USB / camera memory imports
     pub usb_import_path: PathBuf,
     /// Google OAuth client ID
@@ -37,13 +73,22 @@ impl Default for Config {
         printer_for_size.insert("10x15".to_string(), "Printer1".to_string());
         printer_for_size.insert("15x23".to_string(), "Printer2".to_string());
 
+        let mut media_for_size = HashMap::new();
+        media_for_size.insert("10x15".to_string(), "w288h432".to_string());
+        media_for_size.insert("15x23".to_string(), "w432h648".to_string());
+
+        let mut printer_options = HashMap::new();
+        printer_options.insert("Printer1".to_string(), PrinterOptions::default());
+        printer_options.insert("Printer2".to_string(), PrinterOptions::default());
+
         Self {
             photo_directory: PathBuf::from("./photos"),
             paper_sizes: vec!["10x15".to_string(), "15x23".to_string()],
             default_paper_size: 0,
             copies_default: 1,
-            fit_to_page: true,
+            media_for_size,
             printer_for_size,
+            printer_options,
             usb_import_path: PathBuf::from("/media"),
             google_client_id: String::new(),
             google_client_secret: String::new(),
@@ -63,6 +108,10 @@ impl Default for Config {
 }
 
 impl Config {
+    pub fn media_for_size(&self, size: &str) -> Option<&str> {
+        self.media_for_size.get(size).map(|s| s.as_str())
+    }
+
     pub fn load() -> Self {
         // Search paths in priority order
         let candidates = [
@@ -161,5 +210,15 @@ impl Config {
 
     pub fn price_for_size(&self, size: &str) -> f64 {
         self.price_per_format.get(size).copied().unwrap_or(0.0)
+    }
+
+    pub fn options_for_printer(&self, printer_name: &str) -> &PrinterOptions {
+        self.printer_options
+            .get(printer_name)
+            .unwrap_or_else(|| {
+                // Return a static default if not configured
+                static DEFAULT: std::sync::OnceLock<PrinterOptions> = std::sync::OnceLock::new();
+                DEFAULT.get_or_init(PrinterOptions::default)
+            })
     }
 }
